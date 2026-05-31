@@ -146,26 +146,47 @@ begin
   Result := FStoreIndex;
 end;
 
+{ TSymbolRange: lightweight record stored per file_id for enclosing-symbol
+  resolution.  StartLine/EndLine are the symbol's declared source range;
+  QName is the symbol's qualified_name used as graph node id. }
+type
+  TSymbolRange = record
+    StartLine: Integer;
+    EndLine:   Integer;
+    QName:     string;
+  end;
+
 function TDbGraphSource.LoadTopology(AData: TGraphData): Boolean;
 var
-  Q:            TFDQuery;
-  FileMap:      TDictionary<Int64, string>;   { file_id -> path }
-  IdToQName:    TDictionary<Int64, string>;   { symbol.id -> qualified_name }
-  FileIdToUnit: TDictionary<Int64, string>;   { file_id -> unit qualified_name }
-  DocSymIds:    TDictionary<Int64, Boolean>;  { symbol_id -> deprecated }
-  ExtSeen:      TDictionary<string, Boolean>; { external node ids already added }
-  Node:         TGraphNode;
-  Edge:         TGraphEdge;
-  SymId:        Int64;
-  FileId:       Int64;
-  TargetFileId: Int64;
-  ParentDbId:   Int64;
-  Deprecated:   Boolean;
-  SrcQName:     string;
-  TgtQName:     string;
-  ExtId:        string;
-  UnitName:     string;
-  Section:      string;
+  Q:               TFDQuery;
+  FileMap:         TDictionary<Int64, string>;
+  IdToQName:       TDictionary<Int64, string>;
+  FileIdToUnit:    TDictionary<Int64, string>;
+  DocSymIds:       TDictionary<Int64, Boolean>;
+  ExtSeen:         TDictionary<string, Boolean>;
+  { Per-file symbol ranges for enclosing-symbol lookup (Task 3) }
+  FileRanges:      TObjectDictionary<Int64, TList<TSymbolRange>>;
+  RangeList:       TList<TSymbolRange>;
+  SR:              TSymbolRange;
+  Node:            TGraphNode;
+  Edge:            TGraphEdge;
+  SymId:           Int64;
+  FileId:          Int64;
+  TargetFileId:    Int64;
+  ParentDbId:      Int64;
+  Deprecated:      Boolean;
+  SrcQName:        string;
+  TgtQName:        string;
+  ExtId:           string;
+  UnitName:        string;
+  Section:         string;
+  RefKindText:     string;
+  EdgeKind:        TGraphEdgeKind;
+  RefLine:         Integer;
+  RefSymId:        Int64;
+  BestStart:       Integer;
+  BestQName:       string;
+  J:               Integer;
 begin
   Result := False;
   if AData = nil then Exit;
@@ -230,15 +251,19 @@ begin
           Q.Free;
         end;
 
-        { ---- 4. Load symbols -> graph nodes; build file_id->unit map ---- }
+        { ---- 4. Load symbols -> graph nodes; build file_id->unit map
+               and per-file symbol ranges for enclosing-symbol resolution ---- }
         FileIdToUnit := TDictionary<Int64, string>.Create;
+        { TObjectDictionary owns the TList<TSymbolRange> values }
+        FileRanges   := TObjectDictionary<Int64, TList<TSymbolRange>>.Create(
+                          [doOwnsValues]);
         try
           Q := TFDQuery.Create(nil);
           try
             Q.Connection := FConn;
             Q.SQL.Text   :=
               'SELECT id, file_id, parent_id, kind, name, qualified_name, ' +
-              '  signature, start_line, start_col ' +
+              '  signature, start_line, start_col, end_line ' +
               'FROM symbols';
             Q.Open;
             while not Q.Eof do
@@ -282,6 +307,17 @@ begin
               { Populate file_id -> unit qualified_name map }
               if Q.FieldByName('kind').AsString = 'unit' then
                 FileIdToUnit.AddOrSetValue(FileId, Node.Id);
+
+              { Record symbol range for enclosing-symbol lookup }
+              if not FileRanges.TryGetValue(FileId, RangeList) then
+              begin
+                RangeList := TList<TSymbolRange>.Create;
+                FileRanges.Add(FileId, RangeList);
+              end;
+              SR.StartLine := Q.FieldByName('start_line').AsInteger;
+              SR.EndLine   := Q.FieldByName('end_line').AsInteger;
+              SR.QName     := Node.Id;
+              RangeList.Add(SR);
 
               Q.Next;
             end;
@@ -368,11 +404,93 @@ begin
             ExtSeen.Free;
           end;
 
-          { ---- 6. BuildHierarchy ---- }
+          { ---- 6. Load refs -> call/typeref/dfm/sqltableref edges
+                 using enclosing-symbol resolution ---- }
+          Q := TFDQuery.Create(nil);
+          try
+            Q.Connection := FConn;
+            Q.SQL.Text   :=
+              'SELECT symbol_id, file_id, kind, name_text, start_line ' +
+              'FROM refs';
+            Q.Open;
+            while not Q.Eof do
+            begin
+              { Map ref kind to edge kind; skip unrecognised kinds }
+              RefKindText := Q.FieldByName('kind').AsString;
+              if      RefKindText = 'call'          then EdgeKind := ekCalls
+              else if RefKindText = 'type_use'      then EdgeKind := ekTypeRef
+              else if RefKindText = 'event-binding' then EdgeKind := ekDfmBinds
+              else if RefKindText = 'sql_table_ref' then EdgeKind := ekSqlTableRef
+              else
+              begin
+                Q.Next;
+                Continue;
+              end;
+
+              { Target: symbol_id must be non-null; else skip unresolved ref }
+              if Q.FieldByName('symbol_id').IsNull then
+              begin
+                Q.Next;
+                Continue;
+              end;
+              RefSymId := Q.FieldByName('symbol_id').AsLargeInt;
+              if not IdToQName.TryGetValue(RefSymId, TgtQName) then
+              begin
+                Q.Next;
+                Continue;
+              end;
+
+              { Source: find innermost symbol in same file whose range
+                contains the ref's start_line (greatest StartLine wins) }
+              FileId  := Q.FieldByName('file_id').AsLargeInt;
+              RefLine := Q.FieldByName('start_line').AsInteger;
+              SrcQName  := '';
+              BestStart := -1;
+              if FileRanges.TryGetValue(FileId, RangeList) then
+              begin
+                for J := 0 to RangeList.Count - 1 do
+                begin
+                  SR := RangeList[J];
+                  if (SR.StartLine <= RefLine) and (RefLine <= SR.EndLine) then
+                  begin
+                    if SR.StartLine > BestStart then
+                    begin
+                      BestStart := SR.StartLine;
+                      BestQName := SR.QName;
+                    end;
+                  end;
+                end;
+                if BestStart >= 0 then
+                  SrcQName := BestQName;
+              end;
+
+              { Skip if no enclosing symbol found, or self-edge }
+              if (SrcQName = '') or (SrcQName = TgtQName) then
+              begin
+                Q.Next;
+                Continue;
+              end;
+
+              FillChar(Edge, SizeOf(Edge), 0);
+              Edge.SourceId := SrcQName;
+              Edge.TargetId := TgtQName;
+              Edge.Kind     := EdgeKind;
+              Edge.Weight   := 1.0;
+              AData.AddEdge(Edge);
+
+              Q.Next;
+            end;
+            Q.Close;
+          finally
+            Q.Free;
+          end;
+
+          { ---- 7. BuildHierarchy ---- }
           AData.BuildHierarchy;
           Result := True;
 
         finally
+          FileRanges.Free;
           FileIdToUnit.Free;
         end;
 

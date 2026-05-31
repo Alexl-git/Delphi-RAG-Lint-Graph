@@ -241,7 +241,8 @@ function CreateTempV6Db: string;
 var
   Conn: TFDConnection;
   Stmt: string;
-  FileId, FileIdV, UnitId, ClassId: Int64;
+  FileId, FileIdV, UnitId, ClassId, MethodBarId: Int64;
+  BazClassId, BazMethodId: Int64;
   Q: TFDQuery;
 begin
   { Build a unique temp path without actually creating/locking the file.
@@ -328,13 +329,77 @@ begin
         Q.Free;
       end;
 
-      { Method symbol U.TFoo.Bar, parent = class }
+      { Method symbol U.TFoo.Bar, parent = class, lines 10..15 }
       Conn.ExecSQL(
         'INSERT INTO symbols(file_id, parent_id, kind, name, qualified_name, ' +
         '  signature, modifiers, start_line, start_col, end_line, end_col) ' +
         'VALUES (' + IntToStr(FileId) + ', ' + IntToStr(ClassId) +
         ', ''method'', ''Bar'', ''U.TFoo.Bar'', ' +
         '  ''procedure Bar'', NULL, 10, 5, 15, 7)');
+      Q := TFDQuery.Create(nil);
+      try
+        Q.Connection := Conn;
+        Q.SQL.Text := 'SELECT last_insert_rowid()';
+        Q.Open;
+        MethodBarId := Q.Fields[0].AsLargeInt;
+        Q.Close;
+      finally
+        Q.Free;
+      end;
+
+      { Class U.TBaz: call target class, parent = unit U, lines 20..40 }
+      Conn.ExecSQL(
+        'INSERT INTO symbols(file_id, parent_id, kind, name, qualified_name, ' +
+        '  signature, modifiers, start_line, start_col, end_line, end_col) ' +
+        'VALUES (' + IntToStr(FileId) + ', ' + IntToStr(UnitId) +
+        ', ''class'', ''TBaz'', ''U.TBaz'', ' +
+        '  NULL, NULL, 20, 3, 40, 1)');
+      Q := TFDQuery.Create(nil);
+      try
+        Q.Connection := Conn;
+        Q.SQL.Text := 'SELECT last_insert_rowid()';
+        Q.Open;
+        BazClassId := Q.Fields[0].AsLargeInt;
+        Q.Close;
+      finally
+        Q.Free;
+      end;
+
+      { Method U.TBaz.MB: call target method, parent = U.TBaz, lines 25..30 }
+      Conn.ExecSQL(
+        'INSERT INTO symbols(file_id, parent_id, kind, name, qualified_name, ' +
+        '  signature, modifiers, start_line, start_col, end_line, end_col) ' +
+        'VALUES (' + IntToStr(FileId) + ', ' + IntToStr(BazClassId) +
+        ', ''method'', ''MB'', ''U.TBaz.MB'', ' +
+        '  ''procedure MB'', NULL, 25, 5, 30, 7)');
+      Q := TFDQuery.Create(nil);
+      try
+        Q.Connection := Conn;
+        Q.SQL.Text := 'SELECT last_insert_rowid()';
+        Q.Open;
+        BazMethodId := Q.Fields[0].AsLargeInt;
+        Q.Close;
+      finally
+        Q.Free;
+      end;
+
+      { refs row 1: kind=''call'', inside Bar (line 12, within 10..15),
+        symbol_id = U.TBaz.MB.  Source will be resolved to U.TFoo.Bar. }
+      Conn.ExecSQL(
+        'INSERT INTO refs(symbol_id, file_id, kind, name_text, ' +
+        '  start_line, start_col, end_line, end_col) ' +
+        'VALUES (' + IntToStr(BazMethodId) + ', ' + IntToStr(FileId) +
+        ', ''call'', ''MB'', 12, 5, 12, 7)');
+
+      { refs row 2: kind=''type_use'', inside Bar (line 13), symbol_id = U.TFoo }
+      Conn.ExecSQL(
+        'INSERT INTO refs(symbol_id, file_id, kind, name_text, ' +
+        '  start_line, start_col, end_line, end_col) ' +
+        'VALUES (' + IntToStr(ClassId) + ', ' + IntToStr(FileId) +
+        ', ''type_use'', ''TFoo'', 13, 5, 13, 9)');
+
+      { Suppress unused variable hint -- MethodBarId is captured for future use }
+      if MethodBarId = 0 then ;
 
       { symbol_docs row for the unit U (documented = true, deprecated = false) }
       Conn.ExecSQL(

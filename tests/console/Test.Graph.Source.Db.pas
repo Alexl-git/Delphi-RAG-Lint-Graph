@@ -44,13 +44,13 @@ begin
     D := TGraphData.Create;
     try
       Check(Src.LoadTopology(D), 'LoadTopology returns True');
-      { 4 symbols (U, U.TFoo, U.TFoo.Bar, V)
+      { 6 symbols (U, U.TFoo, U.TFoo.Bar, U.TBaz, U.TBaz.MB, V)
         + 1 external node (@ext:System.SysUtils, from unit_uses fixture rows)
-        + 1 synthetic @project = 6 nodes.
-        Note: V and @ext:System.SysUtils were added in Task 2 to support
-        unit_uses tests; all three rootless units (U, V, @ext:...) are
-        parented under the single @project sentinel by BuildHierarchy. }
-      CheckEqualsInt(6, D.NodeCount, '4 symbols + 1 external + @project = 6 nodes');
+        + 1 synthetic @project = 8 nodes.
+        Note: V and @ext:System.SysUtils added in Task 2 (unit_uses tests);
+        U.TBaz and U.TBaz.MB added in Task 3 (refs/enclosing-symbol tests).
+        All rootless units (U, V, @ext:...) parented under @project by BuildHierarchy. }
+      CheckEqualsInt(8, D.NodeCount, '6 symbols + 1 external + @project = 8 nodes');
 
       BarIdx := D.FindNodeIndex('U.TFoo.Bar');
       Check(BarIdx >= 0, 'U.TFoo.Bar node present');
@@ -196,6 +196,51 @@ begin
   end;
 end;
 
+{ ---- Test 3: refs -> call/typeref edges via enclosing-symbol resolution ---- }
+
+procedure Test_DbSource_Refs;
+var
+  DbPath:        string;
+  Src:           IGraphSource;
+  D:             TGraphData;
+  I:             Integer;
+  E:             TGraphEdge;
+  FoundCall:     Boolean;
+  FoundTypeRef:  Boolean;
+begin
+  DbPath := CreateTempV6Db;
+  try
+    Src := TDbGraphSource.Create(DbPath, 0);
+    D := TGraphData.Create;
+    try
+      Check(Src.LoadTopology(D), 'LoadTopology returns True');
+
+      FoundCall    := False;
+      FoundTypeRef := False;
+      for I := 0 to D.EdgeCount - 1 do
+      begin
+        E := D.EdgeAt(I);
+        if (E.Kind = ekCalls) and
+           (E.SourceId = 'U.TFoo.Bar') and (E.TargetId = 'U.TBaz.MB') then
+          FoundCall := True;
+        if (E.Kind = ekTypeRef) and (E.SourceId = 'U.TFoo.Bar') then
+          FoundTypeRef := True;
+      end;
+
+      Check(FoundCall,
+        'ekCalls edge U.TFoo.Bar -> U.TBaz.MB (enclosing-symbol resolution)');
+      Check(FoundTypeRef,
+        'ekTypeRef edge from U.TFoo.Bar (type_use ref inside Bar range)');
+
+    finally
+      D.Free;
+    end;
+    Src := nil;
+  finally
+    DeleteTempDb(DbPath);
+  end;
+end;
+
 { ---- Smoke 1 (soft): real ORM3 DB ---- }
 
 procedure Test_DbSource_ORM3Smoke;
@@ -217,7 +262,10 @@ begin
     Check(Src.LoadTopology(D), 'ORM3 LoadTopology returns True');
     Check(D.NodeCount > 100,
       Format('ORM3 NodeCount > 100 (got %d)', [D.NodeCount]));
-    WriteLn(Format('    ORM3 smoke: NodeCount = %d', [D.NodeCount]));
+    Check(D.EdgeCount > 0,
+      Format('ORM3 EdgeCount > 0 (got %d)', [D.EdgeCount]));
+    WriteLn(Format('    ORM3 smoke: NodeCount = %d, EdgeCount = %d',
+      [D.NodeCount, D.EdgeCount]));
   finally
     D.Free;
   end;
@@ -227,5 +275,6 @@ initialization
   RegisterTest('DbSource_LoadTopology',   Test_DbSource_LoadTopology);
   RegisterTest('DbSource_SchemaMismatch', Test_DbSource_SchemaMismatch);
   RegisterTest('DbSource_UnitUses',       Test_DbSource_UnitUses);
+  RegisterTest('DbSource_Refs',           Test_DbSource_Refs);
   RegisterTest('DbSource_ORM3Smoke',      Test_DbSource_ORM3Smoke);
 end.
