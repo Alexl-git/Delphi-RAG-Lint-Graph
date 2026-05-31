@@ -160,6 +160,58 @@ begin
   CheckEqualsInt(1, Found, 'exactly one merged uA->uB edge');
 end;
 
+procedure Test_VMFocusDims;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  I, DimmedCount: Integer;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.CollapseAll;                 { reduce to unit-level: @project, uA, uB }
+  VM.SetFocus('uA', 1);           { neighborhood: uA + uB (uses edge) }
+  Proj := VM.Projection;
+  DimmedCount := 0;
+  for I := 0 to High(Proj.Nodes) do
+    if Proj.Nodes[I].Dimmed then Inc(DimmedCount);
+  { @project is not adjacent to uA in projection edges, so it should be dimmed;
+    uA (focus) and uB (1 hop) are not dimmed. }
+  CheckEqualsInt(1, DimmedCount, 'only @project dimmed at 1 hop from uA');
+  Check(Length(Proj.Nodes) = 3, 'dim mode keeps all nodes visible');
+end;
+
+procedure Test_VMFocusIsolateHides;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.CollapseAll;
+  VM.SetIsolate(True);
+  VM.SetFocus('uA', 1);
+  Proj := VM.Projection;
+  CheckEqualsInt(2, Length(Proj.Nodes), 'isolate hides non-neighbors (uA + uB only)');
+end;
+
+procedure Test_VMClearFocus;
+var
+  VM: IGraphViewModel;
+  I, DimmedCount: Integer;
+  Proj: TGraphProjection;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.CollapseAll;
+  VM.SetFocus('uA', 1);
+  VM.ClearFocus;
+  Proj := VM.Projection;
+  DimmedCount := 0;
+  for I := 0 to High(Proj.Nodes) do
+    if Proj.Nodes[I].Dimmed then Inc(DimmedCount);
+  CheckEqualsInt(0, DimmedCount, 'clearing focus undims all');
+end;
+
 initialization
   RegisterTest('VMLoadsViaSource', Test_VMLoadsViaSource);
   RegisterTest('VMSelectionFiresEvent', Test_VMSelectionFiresEvent);
@@ -168,4 +220,7 @@ initialization
   RegisterTest('VMCollapseReroutesEdge', Test_VMCollapseReroutesEdge);
   RegisterTest('VMExpandRestores', Test_VMExpandRestores);
   RegisterTest('VMEdgeAggregation', Test_VMEdgeAggregation);
+  RegisterTest('VMFocusDims', Test_VMFocusDims);
+  RegisterTest('VMFocusIsolateHides', Test_VMFocusIsolateHides);
+  RegisterTest('VMClearFocus', Test_VMClearFocus);
 end.

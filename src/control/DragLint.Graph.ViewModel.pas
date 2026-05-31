@@ -55,6 +55,10 @@ type
     procedure CollapseAll;
     procedure ExpandAll;
     function  IsCollapsed(const AId: string): Boolean;
+    procedure SetFocus(const AId: string; AHops: Integer = 1);
+    procedure ClearFocus;
+    function  GetIsolate: Boolean;
+    procedure SetIsolate(AValue: Boolean);
   end;
 
   TGraphViewModel = class(TInterfacedObject, IGraphViewModel)
@@ -67,6 +71,9 @@ type
     FOnChanged:   TGraphVMNotify;
     FOnSelectionChanged: TGraphVMNotify;
     FCollapsed:   TDictionary<string, Boolean>;
+    FFocusId:     string;
+    FFocusHops:   Integer;
+    FIsolate:     Boolean;
     procedure DoChanged;
     procedure DoSelectionChanged;
     procedure Reload;
@@ -74,6 +81,8 @@ type
     function NodeIsCollapsed(AIndex: Integer): Boolean;
     function NodeIsVisible(AIndex: Integer): Boolean;
     function RepresentativeOf(AIndex: Integer): Integer;
+    procedure ComputeNeighborhood(AStart, AHops: Integer;
+      AEdges: TList<TProjEdge>; ASet: TDictionary<Integer, Boolean>);
   public
     constructor Create;
     destructor Destroy; override;
@@ -95,6 +104,10 @@ type
     procedure CollapseAll;
     procedure ExpandAll;
     function  IsCollapsed(const AId: string): Boolean;
+    procedure SetFocus(const AId: string; AHops: Integer = 1);
+    procedure ClearFocus;
+    function  GetIsolate: Boolean;
+    procedure SetIsolate(AValue: Boolean);
   end;
 
 implementation
@@ -106,6 +119,9 @@ begin
   FActiveStore := -1;
   FSelectedId := '';
   FCollapsed := TDictionary<string, Boolean>.Create;
+  FFocusId := '';
+  FFocusHops := 1;
+  FIsolate := False;
 end;
 
 destructor TGraphViewModel.Destroy;
@@ -129,6 +145,7 @@ procedure TGraphViewModel.Reload;
 begin
   FSelectedId := '';
   FCollapsed.Clear;
+  FFocusId := '';
   FData.Clear;
   if FSource <> nil then
     FSource.LoadTopology(FData);
@@ -219,6 +236,8 @@ var
   PE: TProjEdge;
   E: TGraphEdge;
   Key: string;
+  FocusRep: Integer;
+  InHood: TDictionary<Integer, Boolean>;
 begin
   Nodes := TList<TProjNode>.Create;
   Edges := TList<TProjEdge>.Create;
@@ -266,6 +285,43 @@ begin
       end;
     finally
       EdgeKey.Free;
+    end;
+    { focus: BFS over the visible projection graph from the focus node's
+      representative, marking nodes within FFocusHops as in-neighborhood. }
+    if FFocusId <> '' then
+    begin
+      FocusRep := RepresentativeOf(FData.FindNodeIndex(FFocusId));
+      if FocusRep >= 0 then
+      begin
+        InHood := TDictionary<Integer, Boolean>.Create;
+        try
+          ComputeNeighborhood(FocusRep, FFocusHops, Edges, InHood);
+          { mark node Dimmed when not in neighborhood }
+          for I := 0 to Nodes.Count - 1 do
+          begin
+            PN := Nodes[I];
+            PN.Dimmed := not InHood.ContainsKey(PN.NodeIdx);
+            Nodes[I] := PN;
+          end;
+          { dim edges touching a dimmed node }
+          for I := 0 to Edges.Count - 1 do
+          begin
+            PE := Edges[I];
+            PE.Dimmed := (not InHood.ContainsKey(PE.SourceIdx))
+                      or (not InHood.ContainsKey(PE.TargetIdx));
+            Edges[I] := PE;
+          end;
+          if FIsolate then
+          begin
+            for I := Nodes.Count - 1 downto 0 do
+              if Nodes[I].Dimmed then Nodes.Delete(I);
+            for I := Edges.Count - 1 downto 0 do
+              if Edges[I].Dimmed then Edges.Delete(I);
+          end;
+        finally
+          InHood.Free;
+        end;
+      end;
     end;
     Result.Nodes := Nodes.ToArray;
     Result.Edges := Edges.ToArray;
@@ -338,7 +394,7 @@ var
 begin
   FCollapsed.Clear;
   for I := 0 to FData.NodeCount - 1 do
-    if NodeHasChildren(I) then
+    if NodeHasChildren(I) and (FData.NodeAt(I)^.Kind <> nkProject) then
       FCollapsed.AddOrSetValue(FData.NodeAt(I)^.Id, True);
   DoChanged;
 end;
@@ -352,6 +408,76 @@ end;
 function TGraphViewModel.IsCollapsed(const AId: string): Boolean;
 begin
   Result := FCollapsed.ContainsKey(AId);
+end;
+
+procedure TGraphViewModel.SetFocus(const AId: string; AHops: Integer);
+begin
+  FFocusId := AId;
+  if AHops < 0 then AHops := 0;
+  FFocusHops := AHops;
+  DoChanged;
+end;
+
+procedure TGraphViewModel.ClearFocus;
+begin
+  FFocusId := '';
+  DoChanged;
+end;
+
+function TGraphViewModel.GetIsolate: Boolean;
+begin
+  Result := FIsolate;
+end;
+
+procedure TGraphViewModel.SetIsolate(AValue: Boolean);
+begin
+  if FIsolate <> AValue then
+  begin
+    FIsolate := AValue;
+    DoChanged;
+  end;
+end;
+
+procedure TGraphViewModel.ComputeNeighborhood(AStart, AHops: Integer;
+  AEdges: TList<TProjEdge>; ASet: TDictionary<Integer, Boolean>);
+var
+  Frontier, Next: TList<Integer>;
+  Hop, I, J, N: Integer;
+begin
+  ASet.AddOrSetValue(AStart, True);
+  Frontier := TList<Integer>.Create;
+  Next := TList<Integer>.Create;
+  try
+    Frontier.Add(AStart);
+    for Hop := 1 to AHops do
+    begin
+      Next.Clear;
+      for I := 0 to Frontier.Count - 1 do
+      begin
+        N := Frontier[I];
+        for J := 0 to AEdges.Count - 1 do
+        begin
+          if AEdges[J].SourceIdx = N then
+            if not ASet.ContainsKey(AEdges[J].TargetIdx) then
+            begin
+              ASet.AddOrSetValue(AEdges[J].TargetIdx, True);
+              Next.Add(AEdges[J].TargetIdx);
+            end;
+          if AEdges[J].TargetIdx = N then
+            if not ASet.ContainsKey(AEdges[J].SourceIdx) then
+            begin
+              ASet.AddOrSetValue(AEdges[J].SourceIdx, True);
+              Next.Add(AEdges[J].SourceIdx);
+            end;
+        end;
+      end;
+      Frontier.Clear;
+      Frontier.AddRange(Next);
+    end;
+  finally
+    Frontier.Free;
+    Next.Free;
+  end;
 end;
 
 end.
