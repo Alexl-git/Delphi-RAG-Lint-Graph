@@ -336,17 +336,21 @@ begin
     Exit;
   end;
 
-  { Pick any method qname from the live DB }
+  { Pick any method qname from the live DB -- open read-only + immutable.
+    Use the SQLite URI form (file:///path?immutable=1); SQLITE_CONFIG_URI
+    was enabled in DragLint.Graph.Source.Db initialization so file: URIs
+    are interpreted by FireDAC even without the SQLITE_OPEN_URI flag. }
   QName := '';
   Conn := TFDConnection.Create(nil);
   try
     Conn.DriverName := 'SQLite';
-    Conn.Params.Values['Database']    := ORM3_PATH;
-    Conn.Params.Values['OpenMode']    := 'ReadWrite';
+    Conn.Params.Values['Database'] :=
+      'file:///' + StringReplace(ORM3_PATH, '\', '/', [rfReplaceAll]) +
+      '?immutable=1';
+    Conn.Params.Values['OpenMode']    := 'ReadOnly';
     Conn.Params.Values['LockingMode'] := 'Normal';
     Conn.LoginPrompt := False;
     Conn.Connected   := True;
-    Conn.ExecSQL('PRAGMA query_only = ON');
     Q := TFDQuery.Create(nil);
     try
       Q.Connection := Conn;
@@ -388,14 +392,24 @@ procedure Test_DbSource_ORM3Smoke;
 const
   ORM3_PATH = 'C:\Projects\DB\ORM3\drag-lint.sqlite';
 var
-  Src: IGraphSource;
-  D:   TGraphData;
+  Src:       IGraphSource;
+  D:         TGraphData;
+  WalPath:   string;
+  ShmPath:   string;
+  WalExistedBefore: Boolean;
+  ShmExistedBefore: Boolean;
 begin
   if not TFile.Exists(ORM3_PATH) then
   begin
     WriteLn('    SKIP: ORM3 DB not found at ' + ORM3_PATH);
     Exit;
   end;
+
+  WalPath := ORM3_PATH + '-wal';
+  ShmPath := ORM3_PATH + '-shm';
+  { Record whether sidecar files pre-existed (another process may own them) }
+  WalExistedBefore := TFile.Exists(WalPath);
+  ShmExistedBefore := TFile.Exists(ShmPath);
 
   Src := TDbGraphSource.Create(ORM3_PATH, 0);
   D := TGraphData.Create;
@@ -410,6 +424,32 @@ begin
   finally
     D.Free;
   end;
+
+  { Release the connection before checking for sidecars }
+  Src := nil;
+
+  { Assert that opening with immutable=1 + ReadOnly did NOT create new sidecar
+    files.  If they pre-existed (owned by another process) we cannot assert
+    their absence -- skip that check with a note. }
+  if not WalExistedBefore then
+  begin
+    Check(not TFile.Exists(WalPath),
+      'ORM3 smoke: -wal sidecar created by immutable read-only open (should not happen)');
+    if not TFile.Exists(WalPath) then
+      WriteLn('    ORM3 smoke: no -wal sidecar created (immutable open OK)');
+  end
+  else
+    WriteLn('    ORM3 smoke: -wal pre-existed (owned by another process) -- sidecar check skipped');
+
+  if not ShmExistedBefore then
+  begin
+    Check(not TFile.Exists(ShmPath),
+      'ORM3 smoke: -shm sidecar created by immutable read-only open (should not happen)');
+    if not TFile.Exists(ShmPath) then
+      WriteLn('    ORM3 smoke: no -shm sidecar created (immutable open OK)');
+  end
+  else
+    WriteLn('    ORM3 smoke: -shm pre-existed (owned by another process) -- sidecar check skipped');
 end;
 
 { ---- Task 5 (deterministic): TDbCatalog cross-store resolution ---- }
@@ -505,17 +545,10 @@ begin
     Exit;
   end;
 
-  { The library DB may be locked by the drag-lint indexer process.
-    Treat any "database is locked" / open failure as a SKIP (soft smoke). }
-  try
-    Cat := TDbCatalog.Create([ORM3_PATH, LIB_PATH]);
-  except
-    on Ex: Exception do
-    begin
-      WriteLn('    SKIP: could not open catalog (' + Ex.Message + ')');
-      Exit;
-    end;
-  end;
+  { With immutable=1 + ReadOnly the library DB must open even if the indexer
+    holds a write lock.  Any open failure here is now a FAIL (not a SKIP),
+    because immutable open should bypass the WAL locking entirely. }
+  Cat := TDbCatalog.Create([ORM3_PATH, LIB_PATH]);
 
   try
     { ---- LoadTopology store 0 (ORM3) ---- }
@@ -547,7 +580,8 @@ begin
 
     { ---- ResolveAcrossStores against library (no LoadTopology) ---- }
     { Try well-known RTL names -- at least one should be in the library.
-      Opening the library DB may fail if it is locked; treat that as SKIP. }
+      With immutable=1 the library open must succeed even when the indexer
+      holds a write lock; any exception here is now a FAIL (not a SKIP). }
     ResolveNames[0] := 'TObject';
     ResolveNames[1] := 'IInterface';
     ResolveNames[2] := 'TList';
@@ -555,41 +589,26 @@ begin
 
     for NName in ResolveNames do
     begin
-      try
-        T0 := Now;
-        Res := Cat.ResolveAcrossStores(NName);
-        ElapsedMs := (Now - T0) * 86400.0 * 1000.0;
-        if Res.Found then
-        begin
-          Check(Res.StoreIndex in [0, 1],
-            'CatalogSmoke: StoreIndex in {0,1} for ' + NName);
-          WriteLn(Format('    CatalogSmoke: ResolveAcrossStores(%s) -> store %d,' +
-                         ' qname=%s (%.0f ms)',
-            [NName, Res.StoreIndex, Res.TargetId, ElapsedMs]));
-          if ElapsedMs > 10000 then
-            WriteLn('    WARNING: ResolveAcrossStores took > 10 s -- check index');
-        end
-        else
-          WriteLn(Format('    CatalogSmoke: ResolveAcrossStores(%s) -> not found' +
-                         ' (%.0f ms)', [NName, ElapsedMs]));
-      except
-        on Ex: Exception do
-        begin
-          WriteLn('    SKIP: ResolveAcrossStores(' + NName + ') failed -- ' +
-                  Ex.Message);
-          Cat := nil;
-          Exit;
-        end;
-      end;
+      T0 := Now;
+      Res := Cat.ResolveAcrossStores(NName);
+      ElapsedMs := (Now - T0) * 86400.0 * 1000.0;
+      if Res.Found then
+      begin
+        Check(Res.StoreIndex in [0, 1],
+          'CatalogSmoke: StoreIndex in {0,1} for ' + NName);
+        WriteLn(Format('    CatalogSmoke: ResolveAcrossStores(%s) -> store %d,' +
+                       ' qname=%s (%.0f ms)',
+          [NName, Res.StoreIndex, Res.TargetId, ElapsedMs]));
+        if ElapsedMs > 10000 then
+          WriteLn('    WARNING: ResolveAcrossStores took > 10 s -- check index');
+      end
+      else
+        WriteLn(Format('    CatalogSmoke: ResolveAcrossStores(%s) -> not found' +
+                       ' (%.0f ms)', [NName, ElapsedMs]));
     end;
 
+  finally
     Cat := nil;
-  except
-    on Ex: Exception do
-    begin
-      Cat := nil;
-      raise;
-    end;
   end;
 end;
 

@@ -12,6 +12,7 @@ unit DragLint.Graph.Source.Db;
 interface
 
 uses
+  Winapi.Windows,
   System.SysUtils,
   System.Classes,
   System.Generics.Collections,
@@ -95,19 +96,43 @@ procedure TDbGraphSource.Connect(const ADbPath: string);
 begin
   FConn := TFDConnection.Create(nil);
   FConn.DriverName := 'SQLite';
-  FConn.Params.Values['Database'] := ADbPath;
-  { Open read-write so WAL-mode databases can access the -shm coordination
-    file; we enforce the "never mutate" contract via PRAGMA query_only = ON
-    which raises SQLITE_READONLY on any attempt to execute DML or DDL.
-    Note: OpenMode=ReadOnly fails on WAL-mode databases (SQLite cannot
-    create the -shm file when the connection has SQLITE_OPEN_READONLY). }
-  FConn.Params.Values['OpenMode']    := 'ReadWrite';
+  { Open read-only + immutable so that:
+    (a) no -shm/-wal sidecar files are created next to the user's database,
+    (b) no writer lock is acquired -- the connection coexists with a live
+        indexer process that may hold an exclusive or reserved lock.
+
+    SQLite immutable=1 is a URI query parameter that tells SQLite the file
+    will not change while open, bypassing WAL/locking coordination entirely.
+    FireDAC (Delphi 13) does NOT add SQLITE_OPEN_URI to its open flags and
+    does NOT map SQLiteAdvanced=immutable=1 to the URI parameter (it runs
+    it as a PRAGMA, which is not valid).  To enable URI filenames, our
+    unit initialization calls sqlite3_config(SQLITE_CONFIG_URI=17, 1) before
+    any connection is made; this enables URI interpretation globally for the
+    process.  We then pass a file: URI as the Database path.
+
+    file:///C:/path uses three slashes for the empty authority + Windows
+    absolute path.  Forward slashes are required by the URI spec.
+
+    OpenMode=ReadOnly maps to SQLITE_OPEN_READONLY.
+    No PRAGMA query_only is needed: ReadOnly already prevents all writes. }
+  FConn.Params.Values['OpenMode']    := 'ReadOnly';
   FConn.Params.Values['LockingMode'] := 'Normal';
   FConn.LoginPrompt := False;
-  FConn.Connected   := True;
-  { Enforce read-only semantics for this session.  Any DML/DDL will raise
-    SQLITE_READONLY (8) rather than silently modifying the user's database. }
-  FConn.ExecSQL('PRAGMA query_only = ON');
+  { Percent-encode characters that are significant in a URI path so that
+    paths containing spaces, '#', or '?' do not break the file: URI.
+    Current DB paths have no such characters; this is defensive for future
+    paths.  '\' -> '/' is required by the URI spec (Windows absolute path). }
+  FConn.Params.Values['Database'] :=
+    'file:///'
+    + StringReplace(
+        StringReplace(
+          StringReplace(
+            StringReplace(ADbPath, '\', '/', [rfReplaceAll]),
+          ' ', '%20', [rfReplaceAll]),
+        '#', '%23', [rfReplaceAll]),
+      '?', '%3F', [rfReplaceAll])
+    + '?immutable=1';
+  FConn.Connected := True;
 end;
 
 procedure TDbGraphSource.CheckSchema;
@@ -890,5 +915,54 @@ begin
     end;
   end;
 end;
+
+{ ---- SQLite global URI filename enable ---- }
+{ SQLITE_CONFIG_URI (17): when non-zero, all sqlite3_open* calls treat
+  filenames that start with "file:" as URI filenames, enabling query
+  parameters such as ?immutable=1 even without the SQLITE_OPEN_URI flag.
+  Must be called before sqlite3_initialize().  FireDAC loads sqlite3.dll
+  lazily (on first connection); our initialization section runs before any
+  connection is made, so sqlite3_initialize has not yet been called.
+  IMPORTANT: we load sqlite3.dll but do NOT call FreeLibrary.  Calling
+  FreeLibrary would drop the refcount to 0 and unload the DLL, losing the
+  global SQLITE_CONFIG_URI setting.  By keeping a module reference alive,
+  the setting persists when FireDAC later loads the same DLL (Windows
+  returns the same module handle and increments the refcount). }
+var
+  GUriEnabled: Boolean = False;
+  { True when sqlite3_config(SQLITE_CONFIG_URI,1) returned SQLITE_OK(0).
+    If False, URI filenames are NOT active and a file:/// open will fail
+    with SQLITE_CANTOPEN -- it does NOT silently degrade. }
+
+type
+  Tsqlite3_config_vararg = function(op: Integer): Integer; cdecl varargs;
+
+procedure EnableSQLiteUriFilenames;
+var
+  hLib:   HMODULE;
+  fn:     Tsqlite3_config_vararg;
+  rc:     Integer;
+const
+  SQLITE_CONFIG_URI_CONST = 17;
+begin
+  hLib := LoadLibrary('sqlite3.dll');
+  if hLib = 0 then Exit;
+  { hLib intentionally not freed -- keeps the DLL loaded so the config
+    state is not lost when this routine returns. }
+  fn := Tsqlite3_config_vararg(GetProcAddress(hLib, 'sqlite3_config'));
+  if Assigned(fn) then
+  begin
+    rc := fn(SQLITE_CONFIG_URI_CONST, Integer(1));
+    GUriEnabled := (rc = 0);
+    if not GUriEnabled then
+      OutputDebugString(
+        PChar('DragLint.Graph.Source.Db: sqlite3_config(SQLITE_CONFIG_URI,1)'
+          + ' returned ' + IntToStr(rc)
+          + ' -- URI filenames NOT enabled; file:/// opens will fail'));
+  end;
+end;
+
+initialization
+  EnableSQLiteUriFilenames;
 
 end.
