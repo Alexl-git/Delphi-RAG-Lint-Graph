@@ -60,6 +60,15 @@ type
     Col:      Integer;      { 1-based col }
     Layer:    string;       { optional grouping key (e.g. "CLIENT", "SERVER", "RTL") }
 
+    DbId:     Int64;        { originating symbols.id (0 if synthetic) }
+    Signature: string;      { symbols.signature (e.g. SQL column type) }
+    ParentId: string;       { id of containment parent; '' if none/root }
+    ParentIdx: Integer;     { resolved by BuildHierarchy; -1 = root }
+    Documented:    Boolean; { has a symbol_docs row }
+    Deprecated:    Boolean; { symbol_docs.deprecated }
+    IsExternal:    Boolean; { used unit/ref with no in-store target }
+    CrossDbTarget: Boolean; { name resolves only in another store }
+
     { Layout state - mutated by the layout engine }
     X, Y:     Double;       { logical world coordinates (not screen pixels) }
     VX, VY:   Double;       { velocity for force-directed iteration }
@@ -85,7 +94,9 @@ type
     FNodes: TList<TGraphNode>;
     FEdges: TList<TGraphEdge>;
     FIndexById: TDictionary<string, Integer>;  { node id -> node index }
+    FChildren: TObjectList<TList<Integer>>;    { adjacency, index-aligned }
     procedure RebuildIndex;
+    procedure BuildChildren;
   public
     constructor Create;
     destructor Destroy; override;
@@ -100,6 +111,12 @@ type
     function EdgeAt(AIndex: Integer): TGraphEdge;
     function FindNodeIndex(const AId: string): Integer; { -1 if absent }
     function FindNode(const AId: string): PGraphNode;   { nil if absent }
+
+    procedure BuildHierarchy;
+    function ParentIndexOf(AIndex: Integer): Integer;
+    function ChildrenOf(AIndex: Integer): TArray<Integer>;
+    function RootIndices: TArray<Integer>;
+    function DescendantCount(AIndex: Integer): Integer;
   end;
 
 function IsSqlKind(AKind: TGraphNodeKind): Boolean;
@@ -118,10 +135,12 @@ begin
   FNodes     := TList<TGraphNode>.Create;
   FEdges     := TList<TGraphEdge>.Create;
   FIndexById := TDictionary<string, Integer>.Create;
+  FChildren  := TObjectList<TList<Integer>>.Create(True);
 end;
 
 destructor TGraphData.Destroy;
 begin
+  FChildren.Free;
   FIndexById.Free;
   FEdges.Free;
   FNodes.Free;
@@ -133,6 +152,7 @@ begin
   FNodes.Clear;
   FEdges.Clear;
   FIndexById.Clear;
+  FChildren.Clear;
 end;
 
 procedure TGraphData.AddNode(const ANode: TGraphNode);
@@ -191,6 +211,77 @@ begin
     Result := NodeAt(Idx)
   else
     Result := nil;
+end;
+
+procedure TGraphData.BuildChildren;
+var
+  I, P: Integer;
+begin
+  FChildren.Clear;
+  for I := 0 to FNodes.Count - 1 do
+    FChildren.Add(TList<Integer>.Create);
+  for I := 0 to FNodes.Count - 1 do
+  begin
+    P := NodeAt(I).ParentIdx;
+    if (P >= 0) and (P < FNodes.Count) then
+      FChildren[P].Add(I);
+  end;
+end;
+
+procedure TGraphData.BuildHierarchy;
+var
+  I: Integer;
+  N: PGraphNode;
+begin
+  RebuildIndex;
+  for I := 0 to FNodes.Count - 1 do
+  begin
+    N := NodeAt(I);
+    if N.ParentId <> '' then
+      N.ParentIdx := FindNodeIndex(N.ParentId)
+    else
+      N.ParentIdx := -1;
+  end;
+  BuildChildren;
+end;
+
+function TGraphData.ParentIndexOf(AIndex: Integer): Integer;
+begin
+  Result := NodeAt(AIndex).ParentIdx;
+end;
+
+function TGraphData.ChildrenOf(AIndex: Integer): TArray<Integer>;
+begin
+  if (AIndex >= 0) and (AIndex < FChildren.Count) then
+    Result := FChildren[AIndex].ToArray
+  else
+    Result := nil;
+end;
+
+function TGraphData.RootIndices: TArray<Integer>;
+var
+  I: Integer;
+  L: TList<Integer>;
+begin
+  L := TList<Integer>.Create;
+  try
+    for I := 0 to FNodes.Count - 1 do
+      if NodeAt(I).ParentIdx < 0 then
+        L.Add(I);
+    Result := L.ToArray;
+  finally
+    L.Free;
+  end;
+end;
+
+function TGraphData.DescendantCount(AIndex: Integer): Integer;
+var
+  Child: Integer;
+begin
+  Result := 0;
+  if (AIndex < 0) or (AIndex >= FChildren.Count) then Exit;
+  for Child in FChildren[AIndex] do
+    Result := Result + 1 + DescendantCount(Child);
 end;
 
 end.
