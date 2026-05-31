@@ -62,8 +62,59 @@ begin
   end;
 end;
 
+procedure Test_ProjectRootSynthesis;
+var
+  D: TGraphData;
+  Roots: TArray<Integer>;
+  ProjIdx: Integer;
+begin
+  D := TGraphData.Create;
+  try
+    D.AddNode(MakeNode('UA', nkUnit, ''));
+    D.AddNode(MakeNode('UB', nkUnit, ''));
+    D.BuildHierarchy;
+
+    Roots := D.RootIndices;
+    CheckEqualsInt(1, Length(Roots), 'exactly one root after synthesis');
+    ProjIdx := Roots[0];
+    Check(D.NodeAt(ProjIdx).Kind = nkProject, 'synthetic root is nkProject');
+    CheckEqualsInt(2, Length(D.ChildrenOf(ProjIdx)), 'both units parented to project');
+    CheckEqualsInt(3, D.NodeCount, 'project node was appended');
+  finally
+    D.Free;
+  end;
+end;
+
+procedure Test_ContainsEdgeFallback;
+var
+  D: TGraphData;
+  E: TGraphEdge;
+  UIdx, FooIdx: Integer;
+begin
+  D := TGraphData.Create;
+  try
+    D.AddNode(MakeNode('U', nkUnit, ''));            { no explicit ParentId }
+    D.AddNode(MakeNode('U.TFoo', nkClass, ''));      { parent only via edge }
+    FillChar(E, SizeOf(E), 0);
+    E.SourceId := 'U';
+    E.TargetId := 'U.TFoo';
+    E.Kind := ekContains;
+    E.Weight := 1.0;
+    D.AddEdge(E);
+    D.BuildHierarchy;
+
+    UIdx   := D.FindNodeIndex('U');
+    FooIdx := D.FindNodeIndex('U.TFoo');
+    CheckEqualsInt(UIdx, D.ParentIndexOf(FooIdx), 'TFoo parent derived from contains edge');
+  finally
+    D.Free;
+  end;
+end;
+
 initialization
   RegisterTest('HarnessSelfCheck', Test_HarnessSelfCheck);
   RegisterTest('SqlKindClassification', Test_SqlKindClassification);
   RegisterTest('HierarchyFromExplicitParent', Test_HierarchyFromExplicitParent);
+  RegisterTest('ProjectRootSynthesis', Test_ProjectRootSynthesis);
+  RegisterTest('ContainsEdgeFallback', Test_ContainsEdgeFallback);
 end.

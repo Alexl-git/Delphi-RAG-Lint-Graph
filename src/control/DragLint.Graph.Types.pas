@@ -230,10 +230,15 @@ end;
 
 procedure TGraphData.BuildHierarchy;
 var
-  I: Integer;
+  I, SrcIdx, DstIdx, ProjectIdx: Integer;
   N: PGraphNode;
+  E: TGraphEdge;
+  RootlessUnits: TList<Integer>;
+  ProjNode: TGraphNode;
 begin
   RebuildIndex;
+
+  { 1. explicit ParentId }
   for I := 0 to FNodes.Count - 1 do
   begin
     N := NodeAt(I);
@@ -242,6 +247,59 @@ begin
     else
       N.ParentIdx := -1;
   end;
+
+  { 2. contains-edge fallback for still-unparented targets }
+  for I := 0 to FEdges.Count - 1 do
+  begin
+    E := FEdges[I];
+    if E.Kind <> ekContains then Continue;
+    SrcIdx := FindNodeIndex(E.SourceId);
+    DstIdx := FindNodeIndex(E.TargetId);
+    if (SrcIdx < 0) or (DstIdx < 0) then Continue;
+    N := NodeAt(DstIdx);
+    if N.ParentIdx < 0 then
+      N.ParentIdx := SrcIdx;
+  end;
+
+  { 3. project-root synthesis: parent rootless units under a single nkProject }
+  ProjectIdx := -1;
+  for I := 0 to FNodes.Count - 1 do
+    if NodeAt(I).Kind = nkProject then
+    begin
+      ProjectIdx := I;
+      Break;
+    end;
+
+  RootlessUnits := TList<Integer>.Create;
+  try
+    for I := 0 to FNodes.Count - 1 do
+    begin
+      N := NodeAt(I);
+      if (N.Kind = nkUnit) and (N.ParentIdx < 0) then
+        RootlessUnits.Add(I);
+    end;
+
+    if (RootlessUnits.Count > 0) and (ProjectIdx < 0) then
+    begin
+      FillChar(ProjNode, SizeOf(ProjNode), 0);
+      ProjNode.Id := '@project';
+      ProjNode.Label_ := 'Project';
+      ProjNode.Kind := nkProject;
+      ProjNode.ParentId := '';
+      ProjNode.ParentIdx := -1;
+      ProjNode.Radius := 16;
+      AddNode(ProjNode);                  { appends; FIndexById updated }
+      ProjectIdx := FNodes.Count - 1;
+    end;
+
+    if ProjectIdx >= 0 then
+      for I in RootlessUnits do
+        NodeAt(I).ParentIdx := ProjectIdx;
+  finally
+    RootlessUnits.Free;
+  end;
+
+  { 4. adjacency }
   BuildChildren;
 end;
 
