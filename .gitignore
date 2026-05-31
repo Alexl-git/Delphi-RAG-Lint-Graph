@@ -1,0 +1,31 @@
+# Delphi
+*.dcu
+*.local
+*.identcache
+*.tvsconfig
+*.stat
+*.dsk
+__history/
+__recovery/
+*.~*
+
+# Build outputs
+Win32/
+Win64/
+Debug/
+Release/
+bin/
+*.exp
+*.lib
+*.obj
+*.pdb
+*.drc
+*.map
+*.tds
+*.rsm
+
+# IDE
+.vs/
+
+# Test results
+tests/autotest/results/

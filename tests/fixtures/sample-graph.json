@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    { "id": "SampleUnit",                          "label": "SampleUnit",      "kind": "unit",   "file": "SampleUnit.pas", "line": 1,  "layer": "CLIENT" },
+    { "id": "SampleUnit.TKnownClass",              "label": "TKnownClass",     "kind": "class",  "file": "SampleUnit.pas", "line": 12, "layer": "CLIENT" },
+    { "id": "SampleUnit.IKnownInterface",          "label": "IKnownInterface", "kind": "interface","file": "SampleUnit.pas", "line": 8, "layer": "CLIENT" },
+    { "id": "SampleUnit.TKnownClass.KnownMethod",  "label": "KnownMethod",     "kind": "method", "file": "SampleUnit.pas", "line": 53, "layer": "CLIENT" },
+    { "id": "SampleUnit.TKnownClass.KnownProp",    "label": "KnownProp",       "kind": "property","file": "SampleUnit.pas", "line": 22, "layer": "CLIENT" },
+    { "id": "SampleUnit.KNOWN_CONST",              "label": "KNOWN_CONST",     "kind": "const",  "file": "SampleUnit.pas", "line": 27, "layer": "CLIENT" }
+  ],
+  "edges": [
+    { "src": "SampleUnit",                              "dst": "SampleUnit.TKnownClass",             "kind": "contains" },
+    { "src": "SampleUnit",                              "dst": "SampleUnit.IKnownInterface",         "kind": "contains" },
+    { "src": "SampleUnit",                              "dst": "SampleUnit.KNOWN_CONST",             "kind": "contains" },
+    { "src": "SampleUnit.TKnownClass",                  "dst": "SampleUnit.IKnownInterface",         "kind": "implements" },
+    { "src": "SampleUnit.TKnownClass",                  "dst": "SampleUnit.TKnownClass.KnownMethod", "kind": "contains" },
+    { "src": "SampleUnit.TKnownClass",                  "dst": "SampleUnit.TKnownClass.KnownProp",   "kind": "contains" },
+    { "src": "SampleUnit.TKnownClass.KnownMethod",      "dst": "SampleUnit.TKnownClass.KnownMethod", "kind": "calls" },
+    { "src": "SampleUnit.TKnownClass.KnownInterfaceMethod", "dst": "SampleUnit.KNOWN_CONST",        "kind": "calls" }
+  ]
+}
