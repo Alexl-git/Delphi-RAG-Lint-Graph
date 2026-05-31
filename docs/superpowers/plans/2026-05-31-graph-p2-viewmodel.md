@@ -1438,5 +1438,10 @@ Commit: `feat: viewmodel nav back-stack + cross-DB jump + cref/locate delegation
 
 - **Spec coverage (§6, §7):** projection visible-node + aggregated-edge (T1-T3), collapse/expand/all (T2), edge aggregation incl. mixed->ekOther (T3), neighborhood focus dim/isolate/N-hop (T4), selection + lazy SelectedDoc (T1/T5), nav back-stack + NavigateTo expand-one-level + cross-DB jump + Back across stores + ResolveCref/LocateSymbol delegation + OnChanged/OnSelectionChanged/OnStoreChanged (T5).
 - **Deviation:** events are single-cast method-pointers, not Spring4D `IEvent` (documented; View is sole subscriber). `OnCrossDbJumpRequested` host-policy event is deferred to P4/P5 wiring (the in-place `JumpToCrossDb` is implemented now; the View can call it directly).
+- **Reconciliation applied during execution (reviewer-approved):** `CollapseAll`
+  skips the synthetic `nkProject` root (`... and (FData.NodeAt(I)^.Kind <> nkProject)`).
+  Collapsing the root would hide every unit (1 useless node) and break the focus
+  tests; skipping it gives the intended unit-level overview. `Test_VMExpandRestores`'s
+  `< 7` assertion still holds (CollapseAll -> 3 visible: @project + uA + uB).
 - **Deferred to P3:** real `IGraphSource`/`IDbCatalog` over FireDAC sqlite; here everything runs on fakes.
 - **Type consistency:** `TProjNode`/`TProjEdge`/`TGraphProjection`/`TNavEntry`/`TGraphVMNotify`/`IGraphViewModel` names are used identically across the unit and tests; `RepresentativeOf(-1)=-1` guard; `FRestoring` guard prevents Back/jump from wiping restored state.
