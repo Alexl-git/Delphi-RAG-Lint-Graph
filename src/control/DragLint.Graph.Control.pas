@@ -234,11 +234,25 @@ begin
 end;
 
 procedure TDragLintGraphControl.Relayout;
+const
+  { O(N^2) per iteration: cap at a low step count for very large graphs to
+    avoid a multi-minute hang.  For NodeCount > 2000 we only seed positions
+    (Init) and run a handful of steps so the layout is at least partially
+    placed.  Visible-only relayout is a deferred LOD improvement. }
+  LAYOUT_LARGE_THRESHOLD = 2000;
+  LAYOUT_LARGE_STEPS     = 5;
+  LAYOUT_NORMAL_STEPS    = 200;
+var
+  Steps: Integer;
 begin
   if (FVM = nil) or (FVM.Data = nil) then Exit;
   if FVM.Data.NodeCount = 0 then Exit;
   FLayout.Init(FVM.Data, Width * 2.0, Height * 2.0);
-  FLayout.Step(FVM.Data, 200);
+  if FVM.Data.NodeCount > LAYOUT_LARGE_THRESHOLD then
+    Steps := LAYOUT_LARGE_STEPS
+  else
+    Steps := LAYOUT_NORMAL_STEPS;
+  FLayout.Step(FVM.Data, Steps);
   FitToWindow;
 end;
 

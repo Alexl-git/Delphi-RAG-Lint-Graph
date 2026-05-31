@@ -1,17 +1,17 @@
-# drag-lint-graph smoke autotest
+# drag-lint-graph viewer smoke autotest
 #
-# Mirrors the pattern of the main drag-lint repo's autotest:
-# - Build viewer EXE
-# - Sanity-launch with each fixture and check it stays alive ~2s without crashing
-# - Validate the JSON loader parses the fixture without error (via a tiny
-#   probe TForm that reports OK and exits — phase 1 work)
+# Builds the viewer EXE (msbuild), then launches it:
+#   - with --db C:\Projects\DB\ORM3\drag-lint.sqlite  (if the file exists)
+#   - with no args otherwise (shows the no-db message)
+# Asserts the process stays alive ~3s without exiting (crash = FAIL).
+# Kills the process after the check.
 #
-# Exit 0 on pass, non-zero on first failure.
+# Exit 0 = PASS, non-zero = FAIL.
 
 [CmdletBinding()]
 param(
-    [string] $Exe        = "$PSScriptRoot\..\..\bin\Win32\drag_lint_graph.exe",
-    [string] $FixtureDir = "$PSScriptRoot\..\fixtures"
+    [string] $Exe = "$PSScriptRoot\..\..\bin\Win32\drag_lint_graph.exe",
+    [string] $OrmDb = "C:\Projects\DB\ORM3\drag-lint.sqlite"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,40 +23,61 @@ function Write-Check {
     $status = if ($Ok) { 'PASS' } else { 'FAIL' }
     $color  = if ($Ok) { 'Green' } else { 'Red' }
     $msStr  = if ($Ms -gt 0) { "{0,6:N0}ms" -f $Ms } else { '         ' }
-    Write-Host ("  [{0}] {1} {2,-50} {3}" -f $status, $msStr, $Name, $Detail) -ForegroundColor $color
+    Write-Host ("  [{0}] {1} {2,-52} {3}" -f $status, $msStr, $Name, $Detail) -ForegroundColor $color
     $script:Results += [PSCustomObject]@{
         Name = $Name; Ok = $Ok; Detail = $Detail; Ms = $Ms
     }
     if (-not $Ok) { $script:Failed = $true }
 }
 
-Write-Host "drag-lint-graph autotest harness" -ForegroundColor Cyan
-Write-Host "  exe:      $Exe"
-Write-Host "  fixtures: $FixtureDir"
+Write-Host "drag-lint-graph viewer smoke" -ForegroundColor Cyan
 
+# --- Step 1: build viewer EXE ---
+Write-Host "`n== Build ==" -ForegroundColor Cyan
+$dproj = "$PSScriptRoot\..\..\src\viewer\drag_lint_graph.dproj"
+$rsvars = "C:\Program Files (x86)\Embarcadero\Studio\37.0\bin\rsvars.bat"
+
+$t0 = [Diagnostics.Stopwatch]::StartNew()
+$buildOutput = & cmd.exe /c "call `"$rsvars`" && msbuild /t:Build /p:Config=Debug /p:Platform=Win32 /v:minimal `"$dproj`"" 2>&1
+$buildOk = ($LASTEXITCODE -eq 0)
+$t0.Stop()
+Write-Check "viewer EXE builds" $buildOk "exit=$LASTEXITCODE" $t0.Elapsed.TotalMilliseconds
+if (-not $buildOk) {
+    Write-Host "Build output:" -ForegroundColor Yellow
+    $buildOutput | ForEach-Object { Write-Host "  $_" }
+    exit 1
+}
+
+# --- Step 2: verify EXE exists ---
 if (-not (Test-Path $Exe)) {
-    Write-Host "FATAL: viewer EXE not found. Build with build\build_viewer.bat first." -ForegroundColor Red
-    exit 2
+    Write-Check "viewer EXE exists on disk" $false "not found: $Exe"
+    exit 1
 }
-if (-not (Test-Path $FixtureDir)) {
-    Write-Host "FATAL: fixture dir not found: $FixtureDir" -ForegroundColor Red
-    exit 2
-}
+Write-Check "viewer EXE exists on disk" $true $Exe
 
-Write-Host "`n== Viewer launch smoke ==" -ForegroundColor Cyan
+# --- Step 3: launch smoke ---
+Write-Host "`n== Launch smoke ==" -ForegroundColor Cyan
 
-foreach ($fixture in Get-ChildItem $FixtureDir -Filter '*.json') {
-    $t0 = [Diagnostics.Stopwatch]::StartNew()
-    $proc = Start-Process -FilePath $Exe -ArgumentList '--data',$fixture.FullName -PassThru
-    Start-Sleep -Seconds 2
-    $alive = -not $proc.HasExited
-    if ($alive) {
-        Stop-Process -Id $proc.Id -Force
-    }
-    $t0.Stop()
-    Write-Check "$($fixture.Name) loads without crash" $alive "exit=$($proc.ExitCode)" $t0.Elapsed.TotalMilliseconds
+if (Test-Path $OrmDb) {
+    $launchArgs = @('--db', $OrmDb)
+    $launchDesc = "launch with ORM3 DB"
+} else {
+    $launchArgs = @()
+    $launchDesc = "launch with no args (no-db message)"
 }
 
+$t1 = [Diagnostics.Stopwatch]::StartNew()
+$proc = Start-Process -FilePath $Exe -ArgumentList $launchArgs -PassThru
+Start-Sleep -Seconds 3
+$alive = -not $proc.HasExited
+if ($alive) {
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+}
+$t1.Stop()
+$exitStr = if ($proc.HasExited) { "exit=$($proc.ExitCode)" } else { "alive (killed)" }
+Write-Check $launchDesc $alive $exitStr $t1.Elapsed.TotalMilliseconds
+
+# --- Summary ---
 Write-Host ''
 $passes = ($script:Results | Where-Object Ok).Count
 $fails  = ($script:Results | Where-Object { -not $_.Ok }).Count

@@ -56,8 +56,11 @@
         </DelphiCompile>
         <DCCReference Include="..\control\DragLint.Graph.Types.pas"/>
         <DCCReference Include="..\control\DragLint.Graph.Layout.pas"/>
+        <DCCReference Include="..\control\DragLint.Graph.Style.pas"/>
+        <DCCReference Include="..\control\DragLint.Graph.Source.pas"/>
+        <DCCReference Include="..\control\DragLint.Graph.ViewModel.pas"/>
+        <DCCReference Include="..\control\DragLint.Graph.Source.Db.pas"/>
         <DCCReference Include="..\control\DragLint.Graph.Control.pas"/>
-        <DCCReference Include="..\control\DragLint.Graph.Json.pas"/>
         <DCCReference Include="MainForm.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
