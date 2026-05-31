@@ -24,6 +24,10 @@ bin/
 *.tds
 *.rsm
 
+# Generated package resources (the viewer's src/viewer/*.res stays tracked)
+/src/pkg/*.res
+/src/dclpkg/*.res
+
 # IDE
 .vs/
 
