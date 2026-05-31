@@ -82,8 +82,61 @@ begin
   end;
 end;
 
+procedure Test_VMCollapseHidesDescendants;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.Collapse('uA');
+  Proj := VM.Projection;
+  { hidden: uA.TA, uA.TA.MA. visible: @project, uA(collapsed), uB, uB.TB, uB.TB.MB }
+  CheckEqualsInt(5, Length(Proj.Nodes), 'collapsing uA hides its 2 descendants');
+end;
+
+procedure Test_VMCollapseReroutesEdge;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  I, UaIdx, MbIdx, CallCount: Integer;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.Collapse('uA');
+  Proj := VM.Projection;
+  UaIdx := VM.Data.FindNodeIndex('uA');
+  MbIdx := VM.Data.FindNodeIndex('uB.TB.MB');
+  CallCount := 0;
+  for I := 0 to High(Proj.Edges) do
+    if (Proj.Edges[I].Kind = ekCalls) and (Proj.Edges[I].SourceIdx = UaIdx)
+       and (Proj.Edges[I].TargetIdx = MbIdx) then
+      Inc(CallCount);
+  CheckEqualsInt(1, CallCount, 'MA->MB call reroutes to uA->MB when uA collapsed');
+end;
+
+procedure Test_VMExpandRestores;
+var
+  VM: IGraphViewModel;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.Collapse('uA');
+  CheckEqualsInt(5, Length(VM.Projection.Nodes), 'collapsed');
+  VM.Expand('uA');
+  CheckEqualsInt(7, Length(VM.Projection.Nodes), 'expanded back to full');
+  VM.CollapseAll;
+  { CollapseAll collapses every node with children; only roots + their direct... }
+  Check(Length(VM.Projection.Nodes) < 7, 'collapse-all reduces visible nodes');
+  VM.ExpandAll;
+  CheckEqualsInt(7, Length(VM.Projection.Nodes), 'expand-all restores full');
+end;
+
 initialization
   RegisterTest('VMLoadsViaSource', Test_VMLoadsViaSource);
   RegisterTest('VMSelectionFiresEvent', Test_VMSelectionFiresEvent);
   RegisterTest('VMFlatProjection', Test_VMFlatProjection);
+  RegisterTest('VMCollapseHidesDescendants', Test_VMCollapseHidesDescendants);
+  RegisterTest('VMCollapseReroutesEdge', Test_VMCollapseReroutesEdge);
+  RegisterTest('VMExpandRestores', Test_VMExpandRestores);
 end.
