@@ -17,7 +17,9 @@ uses
   Test.Graph.ViewModel in 'Test.Graph.ViewModel.pas',
   DragLint.Graph.Source.Db in '..\..\src\control\DragLint.Graph.Source.Db.pas',
   Test.Db.Fixtures in 'Test.Db.Fixtures.pas',
-  Test.Graph.Source.Db in 'Test.Graph.Source.Db.pas';
+  Test.Graph.Source.Db in 'Test.Graph.Source.Db.pas',
+  DragLint.Graph.Style in '..\..\src\control\DragLint.Graph.Style.pas',
+  Test.Graph.Style in 'Test.Graph.Style.pas';
 
 begin
   WriteLn('drag-lint-graph console tests');
