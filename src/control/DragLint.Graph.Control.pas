@@ -153,8 +153,6 @@ type
                                                   write FOnCrossDbJump;
   end;
 
-procedure Register;
-
 implementation
 
 const
@@ -169,11 +167,6 @@ const
   NODE_RADIUS   = 12;      { default pixel radius for projection nodes }
   LEGEND_MARGIN = 8;
   LEGEND_SWATCH = 14;
-
-procedure Register;
-begin
-  RegisterComponents('Delphi-RAG-Lint', [TDragLintGraphControl]);
-end;
 
 { ---------------------------------------------------------------------------- }
 

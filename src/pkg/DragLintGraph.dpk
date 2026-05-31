@@ -1,0 +1,39 @@
+package DragLintGraph;
+
+{$R *.res}
+{$ALIGN 8}
+{$ASSERTIONS ON}
+{$BOOLEVAL OFF}
+{$DEBUGINFO OFF}
+{$EXTENDEDSYNTAX ON}
+{$IMPORTEDDATA ON}
+{$IOCHECKS ON}
+{$LOCALSYMBOLS ON}
+{$LONGSTRINGS ON}
+{$OPENSTRINGS ON}
+{$OPTIMIZATION ON}
+{$OVERFLOWCHECKS OFF}
+{$RANGECHECKS OFF}
+{$REFERENCEINFO OFF}
+{$SAFEDIVIDE OFF}
+{$STACKFRAMES OFF}
+{$TYPEDADDRESS OFF}
+{$VARSTRINGCHECKS ON}
+{$WRITEABLECONST OFF}
+{$MINENUMSIZE 1}
+{$IMAGEBASE $400000}
+{$IMPLICITBUILD OFF}
+
+requires
+  rtl,
+  vcl;
+
+contains
+  DragLint.Graph.Types in '..\control\DragLint.Graph.Types.pas',
+  DragLint.Graph.Source in '..\control\DragLint.Graph.Source.pas',
+  DragLint.Graph.ViewModel in '..\control\DragLint.Graph.ViewModel.pas',
+  DragLint.Graph.Style in '..\control\DragLint.Graph.Style.pas',
+  DragLint.Graph.Layout in '..\control\DragLint.Graph.Layout.pas',
+  DragLint.Graph.Control in '..\control\DragLint.Graph.Control.pas';
+
+end.
