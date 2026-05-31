@@ -24,6 +24,16 @@ type
     nkConst,
     nkVar,
     nkDfmForm,
+    nkProject,
+    nkSqlTable,
+    nkSqlColumn,
+    nkSqlIndex,
+    nkSqlTrigger,
+    nkSqlGenerator,
+    nkSqlView,
+    nkSqlProcedure,
+    nkSqlException,
+    nkSqlDomain,
     nkOther
   );
 
@@ -34,6 +44,8 @@ type
     ekImplements,
     ekContains,
     ekDfmBinds,
+    ekTypeRef,
+    ekSqlTableRef,
     ekOther
   );
 
@@ -41,7 +53,7 @@ type
     tens of thousands of them in a TList<TGraphNode> with minimal overhead. }
   TGraphNode = record
     Id:       string;       { stable id, e.g. fully qualified name }
-    Label_:   string;       { display label — note trailing _ avoids Delphi reserved word }
+    Label_:   string;       { display label -- note trailing _ avoids Delphi reserved word }
     Kind:     TGraphNodeKind;
     FilePath: string;       { source path (.pas / .dfm) for "open in IDE" }
     Line:     Integer;      { 1-based line for jump-to-source }
@@ -90,7 +102,15 @@ type
     function FindNode(const AId: string): PGraphNode;   { nil if absent }
   end;
 
+function IsSqlKind(AKind: TGraphNodeKind): Boolean;
+
 implementation
+
+function IsSqlKind(AKind: TGraphNodeKind): Boolean;
+begin
+  Result := AKind in [nkSqlTable, nkSqlColumn, nkSqlIndex, nkSqlTrigger,
+    nkSqlGenerator, nkSqlView, nkSqlProcedure, nkSqlException, nkSqlDomain];
+end;
 
 constructor TGraphData.Create;
 begin
