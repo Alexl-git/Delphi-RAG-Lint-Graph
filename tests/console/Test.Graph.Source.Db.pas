@@ -44,8 +44,13 @@ begin
     D := TGraphData.Create;
     try
       Check(Src.LoadTopology(D), 'LoadTopology returns True');
-      { 3 symbols (U, U.TFoo, U.TFoo.Bar) + 1 synthetic @project = 4 nodes }
-      CheckEqualsInt(4, D.NodeCount, '3 symbols + synthetic project = 4 nodes');
+      { 4 symbols (U, U.TFoo, U.TFoo.Bar, V)
+        + 1 external node (@ext:System.SysUtils, from unit_uses fixture rows)
+        + 1 synthetic @project = 6 nodes.
+        Note: V and @ext:System.SysUtils were added in Task 2 to support
+        unit_uses tests; all three rootless units (U, V, @ext:...) are
+        parented under the single @project sentinel by BuildHierarchy. }
+      CheckEqualsInt(6, D.NodeCount, '4 symbols + 1 external + @project = 6 nodes');
 
       BarIdx := D.FindNodeIndex('U.TFoo.Bar');
       Check(BarIdx >= 0, 'U.TFoo.Bar node present');
@@ -138,6 +143,59 @@ begin
   end;
 end;
 
+{ ---- Test 2: unit_uses -> ekUses edges + external nodes ---- }
+
+procedure Test_DbSource_UnitUses;
+var
+  DbPath:  string;
+  Src:     IGraphSource;
+  D:       TGraphData;
+  I:       Integer;
+  E:       TGraphEdge;
+  ExtNode: PGraphNode;
+  FoundUV:   Boolean;
+  FoundUExt: Boolean;
+begin
+  DbPath := CreateTempV6Db;
+  try
+    Src := TDbGraphSource.Create(DbPath, 0);
+    D := TGraphData.Create;
+    try
+      Check(Src.LoadTopology(D), 'LoadTopology returns True');
+
+      { External node @ext:System.SysUtils must exist with IsExternal=True }
+      ExtNode := D.FindNode('@ext:System.SysUtils');
+      Check(ExtNode <> nil, '@ext:System.SysUtils node present');
+      if ExtNode <> nil then
+        Check(ExtNode.IsExternal, '@ext:System.SysUtils.IsExternal = True');
+
+      { Check edges: U->V (interface) and U->@ext:System.SysUtils (implementation) }
+      FoundUV   := False;
+      FoundUExt := False;
+      for I := 0 to D.EdgeCount - 1 do
+      begin
+        E := D.EdgeAt(I);
+        if E.Kind <> ekUses then Continue;
+        if (E.SourceId = 'U') and (E.TargetId = 'V') and
+           (E.Label_ = 'interface') then
+          FoundUV := True;
+        if (E.SourceId = 'U') and
+           (E.TargetId = '@ext:System.SysUtils') and
+           (E.Label_ = 'implementation') then
+          FoundUExt := True;
+      end;
+      Check(FoundUV,   'ekUses edge U->V with Label_=interface exists');
+      Check(FoundUExt, 'ekUses edge U->@ext:System.SysUtils with Label_=implementation exists');
+
+    finally
+      D.Free;
+    end;
+    Src := nil;
+  finally
+    DeleteTempDb(DbPath);
+  end;
+end;
+
 { ---- Smoke 1 (soft): real ORM3 DB ---- }
 
 procedure Test_DbSource_ORM3Smoke;
@@ -168,5 +226,6 @@ end;
 initialization
   RegisterTest('DbSource_LoadTopology',   Test_DbSource_LoadTopology);
   RegisterTest('DbSource_SchemaMismatch', Test_DbSource_SchemaMismatch);
+  RegisterTest('DbSource_UnitUses',       Test_DbSource_UnitUses);
   RegisterTest('DbSource_ORM3Smoke',      Test_DbSource_ORM3Smoke);
 end.

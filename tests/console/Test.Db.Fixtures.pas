@@ -241,7 +241,7 @@ function CreateTempV6Db: string;
 var
   Conn: TFDConnection;
   Stmt: string;
-  FileId, UnitId, ClassId: Int64;
+  FileId, FileIdV, UnitId, ClassId: Int64;
   Q: TFDQuery;
 begin
   { Build a unique temp path without actually creating/locking the file.
@@ -278,7 +278,7 @@ begin
     { Fixture data }
     Conn.StartTransaction;
     try
-      { One file row }
+      { File row for unit U }
       Conn.ExecSQL(
         'INSERT INTO files(path, mtime_unix, sha256, parsed_at, language) ' +
         'VALUES (''C:\src\U.pas'', 0, ''abc'', 0, ''delphi'')');
@@ -343,7 +343,46 @@ begin
         'VALUES (' + IntToStr(UnitId) + ', ''xmldoc'', ''/// unit U'', ' +
         '  ''Unit U summary'', 0, 1, 1)');
 
+      { ---- Second file + unit V (for Task 2 unit_uses tests) ---- }
+
+      { File row for unit V }
+      Conn.ExecSQL(
+        'INSERT INTO files(path, mtime_unix, sha256, parsed_at, language) ' +
+        'VALUES (''C:\src\V.pas'', 0, ''def'', 0, ''delphi'')');
+      Q := TFDQuery.Create(nil);
+      try
+        Q.Connection := Conn;
+        Q.SQL.Text := 'SELECT last_insert_rowid()';
+        Q.Open;
+        FileIdV := Q.Fields[0].AsLargeInt;
+        Q.Close;
+      finally
+        Q.Free;
+      end;
+
+      { Unit symbol V, no parent }
+      Conn.ExecSQL(
+        'INSERT INTO symbols(file_id, parent_id, kind, name, qualified_name, ' +
+        '  signature, modifiers, start_line, start_col, end_line, end_col) ' +
+        'VALUES (' + IntToStr(FileIdV) + ', NULL, ''unit'', ''V'', ''V'', ' +
+        '  NULL, NULL, 1, 1, 20, 1)');
+
+      { unit_uses: U uses V in interface section (in-store target) }
+      Conn.ExecSQL(
+        'INSERT INTO unit_uses(file_id, unit_name, unit_name_norm, section, ' +
+        '  in_path, target_file_id, start_line, start_col) ' +
+        'VALUES (' + IntToStr(FileId) + ', ''V'', ''v'', ''interface'', ' +
+        '  NULL, ' + IntToStr(FileIdV) + ', 3, 3)');
+
+      { unit_uses: U uses System.SysUtils in implementation (external) }
+      Conn.ExecSQL(
+        'INSERT INTO unit_uses(file_id, unit_name, unit_name_norm, section, ' +
+        '  in_path, target_file_id, start_line, start_col) ' +
+        'VALUES (' + IntToStr(FileId) + ', ''System.SysUtils'', ' +
+        '  ''system.sysutils'', ''implementation'', NULL, NULL, 20, 3)');
+
       Conn.Commit;
+
     except
       Conn.Rollback;
       raise;

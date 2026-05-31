@@ -151,12 +151,21 @@ var
   Q:            TFDQuery;
   FileMap:      TDictionary<Int64, string>;   { file_id -> path }
   IdToQName:    TDictionary<Int64, string>;   { symbol.id -> qualified_name }
+  FileIdToUnit: TDictionary<Int64, string>;   { file_id -> unit qualified_name }
   DocSymIds:    TDictionary<Int64, Boolean>;  { symbol_id -> deprecated }
+  ExtSeen:      TDictionary<string, Boolean>; { external node ids already added }
   Node:         TGraphNode;
+  Edge:         TGraphEdge;
   SymId:        Int64;
   FileId:       Int64;
+  TargetFileId: Int64;
   ParentDbId:   Int64;
   Deprecated:   Boolean;
+  SrcQName:     string;
+  TgtQName:     string;
+  ExtId:        string;
+  UnitName:     string;
+  Section:      string;
 begin
   Result := False;
   if AData = nil then Exit;
@@ -221,62 +230,151 @@ begin
           Q.Free;
         end;
 
-        { ---- 4. Load symbols -> graph nodes ---- }
-        Q := TFDQuery.Create(nil);
+        { ---- 4. Load symbols -> graph nodes; build file_id->unit map ---- }
+        FileIdToUnit := TDictionary<Int64, string>.Create;
         try
-          Q.Connection := FConn;
-          Q.SQL.Text   :=
-            'SELECT id, file_id, parent_id, kind, name, qualified_name, ' +
-            '  signature, start_line, start_col ' +
-            'FROM symbols';
-          Q.Open;
-          while not Q.Eof do
-          begin
-            FillChar(Node, SizeOf(Node), 0);
-            SymId  := Q.FieldByName('id').AsLargeInt;
-            FileId := Q.FieldByName('file_id').AsLargeInt;
-
-            Node.Id        := Q.FieldByName('qualified_name').AsString;
-            Node.Label_    := Q.FieldByName('name').AsString;
-            Node.Kind      := KindTextToNodeKind(
-                                Q.FieldByName('kind').AsString);
-            Node.DbId      := SymId;
-            Node.Signature := Q.FieldByName('signature').AsString;
-            Node.Line      := Q.FieldByName('start_line').AsInteger;
-            Node.Col       := Q.FieldByName('start_col').AsInteger;
-            Node.Radius    := 12;
-            Node.ParentIdx := -1;
-
-            { FilePath from file_id map }
-            if not FileMap.TryGetValue(FileId, Node.FilePath) then
-              Node.FilePath := '';
-
-            { ParentId: resolve parent_id (db int) to qualified_name }
-            if not Q.FieldByName('parent_id').IsNull then
+          Q := TFDQuery.Create(nil);
+          try
+            Q.Connection := FConn;
+            Q.SQL.Text   :=
+              'SELECT id, file_id, parent_id, kind, name, qualified_name, ' +
+              '  signature, start_line, start_col ' +
+              'FROM symbols';
+            Q.Open;
+            while not Q.Eof do
             begin
-              ParentDbId := Q.FieldByName('parent_id').AsLargeInt;
-              if not IdToQName.TryGetValue(ParentDbId, Node.ParentId) then
+              FillChar(Node, SizeOf(Node), 0);
+              SymId  := Q.FieldByName('id').AsLargeInt;
+              FileId := Q.FieldByName('file_id').AsLargeInt;
+
+              Node.Id        := Q.FieldByName('qualified_name').AsString;
+              Node.Label_    := Q.FieldByName('name').AsString;
+              Node.Kind      := KindTextToNodeKind(
+                                  Q.FieldByName('kind').AsString);
+              Node.DbId      := SymId;
+              Node.Signature := Q.FieldByName('signature').AsString;
+              Node.Line      := Q.FieldByName('start_line').AsInteger;
+              Node.Col       := Q.FieldByName('start_col').AsInteger;
+              Node.Radius    := 12;
+              Node.ParentIdx := -1;
+
+              { FilePath from file_id map }
+              if not FileMap.TryGetValue(FileId, Node.FilePath) then
+                Node.FilePath := '';
+
+              { ParentId: resolve parent_id (db int) to qualified_name }
+              if not Q.FieldByName('parent_id').IsNull then
+              begin
+                ParentDbId := Q.FieldByName('parent_id').AsLargeInt;
+                if not IdToQName.TryGetValue(ParentDbId, Node.ParentId) then
+                  Node.ParentId := '';
+              end
+              else
                 Node.ParentId := '';
-            end
-            else
-              Node.ParentId := '';
 
-            { Documented / Deprecated flags from symbol_docs }
-            Node.Documented := DocSymIds.ContainsKey(SymId);
-            if Node.Documented then
-              Node.Deprecated := DocSymIds[SymId];
+              { Documented / Deprecated flags from symbol_docs }
+              Node.Documented := DocSymIds.ContainsKey(SymId);
+              if Node.Documented then
+                Node.Deprecated := DocSymIds[SymId];
 
-            AData.AddNode(Node);
-            Q.Next;
+              AData.AddNode(Node);
+
+              { Populate file_id -> unit qualified_name map }
+              if Q.FieldByName('kind').AsString = 'unit' then
+                FileIdToUnit.AddOrSetValue(FileId, Node.Id);
+
+              Q.Next;
+            end;
+            Q.Close;
+          finally
+            Q.Free;
           end;
-          Q.Close;
-        finally
-          Q.Free;
-        end;
 
-        { ---- 5. BuildHierarchy ---- }
-        AData.BuildHierarchy;
-        Result := True;
+          { ---- 5. Load unit_uses -> ekUses edges + external nodes ---- }
+          { External nodes are added BEFORE BuildHierarchy so BuildHierarchy
+            can parent them under @project like any other rootless unit.
+            Deduplication via ExtSeen dictionary. }
+          ExtSeen := TDictionary<string, Boolean>.Create;
+          try
+            Q := TFDQuery.Create(nil);
+            try
+              Q.Connection := FConn;
+              Q.SQL.Text   :=
+                'SELECT file_id, unit_name, section, target_file_id ' +
+                'FROM unit_uses';
+              Q.Open;
+              while not Q.Eof do
+              begin
+                FileId   := Q.FieldByName('file_id').AsLargeInt;
+                UnitName := Q.FieldByName('unit_name').AsString;
+                Section  := Q.FieldByName('section').AsString;
+
+                { Source: the unit symbol for this file }
+                if not FileIdToUnit.TryGetValue(FileId, SrcQName) then
+                begin
+                  Q.Next;
+                  Continue;
+                end;
+
+                { Target: in-store unit or external synthetic node }
+                if not Q.FieldByName('target_file_id').IsNull then
+                begin
+                  TargetFileId := Q.FieldByName('target_file_id').AsLargeInt;
+                  if not FileIdToUnit.TryGetValue(TargetFileId, TgtQName) then
+                  begin
+                    { target_file_id set but no unit symbol found -> treat as external }
+                    TgtQName := '';
+                  end;
+                end
+                else
+                  TgtQName := '';
+
+                if TgtQName = '' then
+                begin
+                  { External: create-once synthetic node }
+                  ExtId := '@ext:' + UnitName;
+                  if not ExtSeen.ContainsKey(ExtId) then
+                  begin
+                    FillChar(Node, SizeOf(Node), 0);
+                    Node.Id         := ExtId;
+                    Node.Label_     := UnitName;
+                    Node.Kind       := nkUnit;
+                    Node.IsExternal := True;
+                    Node.ParentId   := '';
+                    Node.ParentIdx  := -1;
+                    Node.Radius     := 10;
+                    AData.AddNode(Node);
+                    ExtSeen.AddOrSetValue(ExtId, True);
+                  end;
+                  TgtQName := ExtId;
+                end;
+
+                { Add uses edge }
+                FillChar(Edge, SizeOf(Edge), 0);
+                Edge.SourceId := SrcQName;
+                Edge.TargetId := TgtQName;
+                Edge.Kind     := ekUses;
+                Edge.Label_   := Section;
+                Edge.Weight   := 1.0;
+                AData.AddEdge(Edge);
+
+                Q.Next;
+              end;
+              Q.Close;
+            finally
+              Q.Free;
+            end;
+          finally
+            ExtSeen.Free;
+          end;
+
+          { ---- 6. BuildHierarchy ---- }
+          AData.BuildHierarchy;
+          Result := True;
+
+        finally
+          FileIdToUnit.Free;
+        end;
 
       finally
         DocSymIds.Free;
