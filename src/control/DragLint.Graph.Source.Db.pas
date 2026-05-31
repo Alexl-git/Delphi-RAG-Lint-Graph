@@ -15,6 +15,7 @@ uses
   System.SysUtils,
   System.Classes,
   System.Generics.Collections,
+  System.JSON,
   Data.DB,
   FireDAC.Comp.Client,
   FireDAC.Stan.Def,
@@ -505,26 +506,270 @@ begin
   end;
 end;
 
-{ Stubs -- implemented in Task 4 }
+{ ---- Task 4: GetDoc + ResolveCref + LocateSymbol ---- }
 
-function TDbGraphSource.GetDoc(const AQName: string): TGraphDoc;
+{ ParseJsonStringArray: parse a JSON TEXT column value that is an array of
+  strings into AResult.  On any parse failure (null / malformed), AResult is
+  left empty (no exception raised).  The caller must free returned strings
+  via Result being a managed TArray<string>. }
+function ParseJsonStringArray(const AJson: string): TArray<string>;
+var
+  JV:  TJSONValue;
+  JA:  TJSONArray;
+  I:   Integer;
+  L:   TList<string>;
 begin
-  FillChar(Result, SizeOf(Result), 0);
+  Result := nil;
+  if AJson = '' then Exit;
+  JV := nil;
+  try
+    try
+      JV := TJSONObject.ParseJSONValue(AJson);
+    except
+      Exit;
+    end;
+    if not (JV is TJSONArray) then Exit;
+    JA := TJSONArray(JV);
+    L := TList<string>.Create;
+    try
+      for I := 0 to JA.Count - 1 do
+        L.Add(JA.Items[I].Value);
+      Result := L.ToArray;
+    finally
+      L.Free;
+    end;
+  finally
+    JV.Free;
+  end;
 end;
 
-function TDbGraphSource.ResolveCref(const AText: string): TCrefResolution;
+{ ParseJsonParamArray: parse params_json -- array of name/desc objects. }
+function ParseJsonParamArray(const AJson: string): TArray<TDocParam>;
+var
+  JV:  TJSONValue;
+  JA:  TJSONArray;
+  JO:  TJSONObject;
+  I:   Integer;
+  P:   TDocParam;
+  L:   TList<TDocParam>;
+begin
+  Result := nil;
+  if AJson = '' then Exit;
+  JV := nil;
+  try
+    try
+      JV := TJSONObject.ParseJSONValue(AJson);
+    except
+      Exit;
+    end;
+    if not (JV is TJSONArray) then Exit;
+    JA := TJSONArray(JV);
+    L := TList<TDocParam>.Create;
+    try
+      for I := 0 to JA.Count - 1 do
+      begin
+        if not (JA.Items[I] is TJSONObject) then Continue;
+        JO := TJSONObject(JA.Items[I]);
+        FillChar(P, SizeOf(P), 0);
+        P.Name := JO.GetValue<string>('name', '');
+        P.Desc := JO.GetValue<string>('desc', '');
+        L.Add(P);
+      end;
+      Result := L.ToArray;
+    finally
+      L.Free;
+    end;
+  finally
+    JV.Free;
+  end;
+end;
+
+{ ParseJsonExceptionArray: parse exceptions_json -- array of type/desc objects. }
+function ParseJsonExceptionArray(const AJson: string): TArray<TDocException>;
+var
+  JV:  TJSONValue;
+  JA:  TJSONArray;
+  JO:  TJSONObject;
+  I:   Integer;
+  E:   TDocException;
+  L:   TList<TDocException>;
+begin
+  Result := nil;
+  if AJson = '' then Exit;
+  JV := nil;
+  try
+    try
+      JV := TJSONObject.ParseJSONValue(AJson);
+    except
+      Exit;
+    end;
+    if not (JV is TJSONArray) then Exit;
+    JA := TJSONArray(JV);
+    L := TList<TDocException>.Create;
+    try
+      for I := 0 to JA.Count - 1 do
+      begin
+        if not (JA.Items[I] is TJSONObject) then Continue;
+        JO := TJSONObject(JA.Items[I]);
+        FillChar(E, SizeOf(E), 0);
+        E.TypeName := JO.GetValue<string>('type', '');
+        E.Desc     := JO.GetValue<string>('desc', '');
+        L.Add(E);
+      end;
+      Result := L.ToArray;
+    finally
+      L.Free;
+    end;
+  finally
+    JV.Free;
+  end;
+end;
+
+function TDbGraphSource.GetDoc(const AQName: string): TGraphDoc;
+var
+  Q: TFDQuery;
 begin
   FillChar(Result, SizeOf(Result), 0);
-  Result.Text := AText;
-  Result.Kind := crkUnresolved;
+  Q := TFDQuery.Create(nil);
+  try
+    Q.Connection := FConn;
+    Q.SQL.Text :=
+      'SELECT d.format, d.summary, d.remarks, d.returns_text, d.example_text,' +
+      '  d.since_text, d.deprecated, d.params_json, d.exceptions_json,' +
+      '  d.seealso_json' +
+      ' FROM symbols s' +
+      ' LEFT JOIN symbol_docs d ON d.symbol_id = s.id' +
+      ' WHERE s.qualified_name = :q LIMIT 1';
+    Q.ParamByName('q').AsString := AQName;
+    Q.Open;
+    if Q.IsEmpty or Q.FieldByName('format').IsNull then
+    begin
+      Result.HasDoc := False;
+      Exit;
+    end;
+    Result.HasDoc      := True;
+    Result.Format      := Q.FieldByName('format').AsString;
+    Result.Summary     := Q.FieldByName('summary').AsString;
+    Result.Remarks     := Q.FieldByName('remarks').AsString;
+    Result.ReturnsText := Q.FieldByName('returns_text').AsString;
+    Result.ExampleText := Q.FieldByName('example_text').AsString;
+    Result.SinceText   := Q.FieldByName('since_text').AsString;
+    Result.Deprecated  := Q.FieldByName('deprecated').AsInteger <> 0;
+    Result.Params      := ParseJsonParamArray(
+                            Q.FieldByName('params_json').AsString);
+    Result.Exceptions  := ParseJsonExceptionArray(
+                            Q.FieldByName('exceptions_json').AsString);
+    Result.SeeAlso     := ParseJsonStringArray(
+                            Q.FieldByName('seealso_json').AsString);
+    Q.Close;
+  finally
+    Q.Free;
+  end;
 end;
 
 function TDbGraphSource.LocateSymbol(const AQName: string; out AFile: string;
   out ALine: Integer): Boolean;
+var
+  Q: TFDQuery;
 begin
   AFile  := '';
   ALine  := 0;
   Result := False;
+  Q := TFDQuery.Create(nil);
+  try
+    Q.Connection := FConn;
+    Q.SQL.Text :=
+      'SELECT f.path, s.start_line' +
+      ' FROM symbols s' +
+      ' JOIN files f ON f.id = s.file_id' +
+      ' WHERE s.qualified_name = :q LIMIT 1';
+    Q.ParamByName('q').AsString := AQName;
+    Q.Open;
+    if not Q.IsEmpty then
+    begin
+      AFile  := Q.FieldByName('path').AsString;
+      ALine  := Q.FieldByName('start_line').AsInteger;
+      Result := True;
+    end;
+    Q.Close;
+  finally
+    Q.Free;
+  end;
+end;
+
+function TDbGraphSource.ResolveCref(const AText: string): TCrefResolution;
+var
+  Q:       TFDQuery;
+  Upper:   string;
+  QNames:  TList<string>;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  Result.Text := AText;
+
+  { URL shortcut }
+  Upper := UpperCase(AText);
+  if (Copy(Upper, 1, 7) = 'HTTP://') or (Copy(Upper, 1, 8) = 'HTTPS://') then
+  begin
+    Result.Kind := crkUrl;
+    Result.Url  := AText;
+    Exit;
+  end;
+
+  { Exact qualified_name match }
+  Q := TFDQuery.Create(nil);
+  try
+    Q.Connection := FConn;
+    Q.SQL.Text :=
+      'SELECT qualified_name FROM symbols WHERE qualified_name = :q LIMIT 1';
+    Q.ParamByName('q').AsString := AText;
+    Q.Open;
+    if not Q.IsEmpty then
+    begin
+      Result.Kind       := crkResolved;
+      Result.TargetId   := Q.Fields[0].AsString;
+      Result.StoreIndex := FStoreIndex;
+      Q.Close;
+      Exit;
+    end;
+    Q.Close;
+
+    { Bare name match (name column) -- up to 5 candidates }
+    QNames := TList<string>.Create;
+    try
+      Q.SQL.Text :=
+        'SELECT qualified_name FROM symbols WHERE name = :n' +
+        ' ORDER BY CASE kind' +
+        '   WHEN ''class'' THEN 0 WHEN ''method'' THEN 1' +
+        '   WHEN ''property'' THEN 2 ELSE 3 END,' +
+        '  qualified_name LIMIT 5';
+      Q.ParamByName('n').AsString := AText;
+      Q.Open;
+      while not Q.Eof do
+      begin
+        QNames.Add(Q.Fields[0].AsString);
+        Q.Next;
+      end;
+      Q.Close;
+
+      if QNames.Count = 0 then
+        Result.Kind := crkUnresolved
+      else if QNames.Count = 1 then
+      begin
+        Result.Kind       := crkResolved;
+        Result.TargetId   := QNames[0];
+        Result.StoreIndex := FStoreIndex;
+      end
+      else
+      begin
+        Result.Kind       := crkAmbiguous;
+        Result.Candidates := QNames.ToArray;
+      end;
+    finally
+      QNames.Free;
+    end;
+  finally
+    Q.Free;
+  end;
 end;
 
 end.

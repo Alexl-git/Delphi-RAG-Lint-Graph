@@ -241,6 +241,147 @@ begin
   end;
 end;
 
+{ ---- Test 4: GetDoc + ResolveCref + LocateSymbol ---- }
+
+procedure Test_DbSource_Docs;
+var
+  DbPath: string;
+  Src:    IGraphSource;
+  Doc:    TGraphDoc;
+  Cref:   TCrefResolution;
+  AFile:  string;
+  ALine:  Integer;
+begin
+  DbPath := CreateTempV6Db;
+  try
+    Src := TDbGraphSource.Create(DbPath, 0);
+
+    { GetDoc: U.TFoo.Bar has a docs row }
+    Doc := Src.GetDoc('U.TFoo.Bar');
+    Check(Doc.HasDoc,    'GetDoc(U.TFoo.Bar).HasDoc = True');
+    CheckEqualsStr('Hi', Doc.Summary, 'GetDoc(U.TFoo.Bar).Summary = Hi');
+    CheckEqualsStr('1.0', Doc.SinceText, 'GetDoc(U.TFoo.Bar).SinceText = 1.0');
+    CheckEqualsInt(2, Length(Doc.SeeAlso),
+      'GetDoc(U.TFoo.Bar): SeeAlso length = 2');
+    CheckEqualsInt(1, Length(Doc.Params),
+      'GetDoc(U.TFoo.Bar): Params length = 1');
+    if Length(Doc.Params) >= 1 then
+      CheckEqualsStr('AX', Doc.Params[0].Name,
+        'GetDoc(U.TFoo.Bar): Params[0].Name = AX');
+
+    { GetDoc: U has a docs row (fixture) but we test a symbol with no doc row }
+    Doc := Src.GetDoc('U');
+    { U has a docs row in the fixture; ensure it is loaded correctly }
+    Check(Doc.HasDoc, 'GetDoc(U).HasDoc = True (fixture row present)');
+
+    { GetDoc: missing symbol -> HasDoc False }
+    Doc := Src.GetDoc('NoSuch.Symbol');
+    Check(not Doc.HasDoc, 'GetDoc(missing).HasDoc = False');
+
+    { ResolveCref: URL -> crkUrl }
+    Cref := Src.ResolveCref('https://x');
+    CheckEqualsInt(Ord(crkUrl), Ord(Cref.Kind),
+      'ResolveCref(https://x).Kind = crkUrl');
+
+    { ResolveCref: exact qname -> crkResolved }
+    Cref := Src.ResolveCref('U.TFoo');
+    CheckEqualsInt(Ord(crkResolved), Ord(Cref.Kind),
+      'ResolveCref(U.TFoo).Kind = crkResolved');
+    CheckEqualsStr('U.TFoo', Cref.TargetId,
+      'ResolveCref(U.TFoo).TargetId = U.TFoo');
+
+    { ResolveCref: nonexistent name -> crkUnresolved }
+    Cref := Src.ResolveCref('Nope.Missing');
+    CheckEqualsInt(Ord(crkUnresolved), Ord(Cref.Kind),
+      'ResolveCref(Nope.Missing).Kind = crkUnresolved');
+
+    { ResolveCref: bare name with exactly one match -> crkResolved }
+    Cref := Src.ResolveCref('Bar');
+    CheckEqualsInt(Ord(crkResolved), Ord(Cref.Kind),
+      'ResolveCref(Bar) bare-name: Kind = crkResolved (only U.TFoo.Bar named Bar)');
+    CheckEqualsStr('U.TFoo.Bar', Cref.TargetId,
+      'ResolveCref(Bar).TargetId = U.TFoo.Bar');
+
+    { LocateSymbol: found -> True, non-empty path }
+    Check(Src.LocateSymbol('U.TFoo.Bar', AFile, ALine),
+      'LocateSymbol(U.TFoo.Bar) = True');
+    Check(AFile <> '', 'LocateSymbol(U.TFoo.Bar): AFile <> empty');
+
+    { LocateSymbol: missing -> False }
+    Check(not Src.LocateSymbol('NoSuch.QName', AFile, ALine),
+      'LocateSymbol(NoSuch.QName) = False');
+
+    Src := nil;
+  finally
+    DeleteTempDb(DbPath);
+  end;
+end;
+
+{ ---- Smoke 4 (soft): ORM3 LocateSymbol on a real method ---- }
+
+procedure Test_DbSource_ORM3LocateSmoke;
+const
+  ORM3_PATH = 'C:\Projects\DB\ORM3\drag-lint.sqlite';
+var
+  Src:    IGraphSource;
+  Q:      TFDQuery;
+  Conn:   TFDConnection;
+  QName:  string;
+  AFile:  string;
+  ALine:  Integer;
+begin
+  if not TFile.Exists(ORM3_PATH) then
+  begin
+    WriteLn('    SKIP: ORM3 DB not found -- LocateSymbol smoke skipped');
+    Exit;
+  end;
+
+  { Pick any method qname from the live DB }
+  QName := '';
+  Conn := TFDConnection.Create(nil);
+  try
+    Conn.DriverName := 'SQLite';
+    Conn.Params.Values['Database']    := ORM3_PATH;
+    Conn.Params.Values['OpenMode']    := 'ReadWrite';
+    Conn.Params.Values['LockingMode'] := 'Normal';
+    Conn.LoginPrompt := False;
+    Conn.Connected   := True;
+    Conn.ExecSQL('PRAGMA query_only = ON');
+    Q := TFDQuery.Create(nil);
+    try
+      Q.Connection := Conn;
+      Q.SQL.Text :=
+        'SELECT qualified_name FROM symbols WHERE kind=''method'' LIMIT 1';
+      Q.Open;
+      if not Q.IsEmpty then
+        QName := Q.Fields[0].AsString;
+      Q.Close;
+    finally
+      Q.Free;
+    end;
+  finally
+    Conn.Free;
+  end;
+
+  if QName = '' then
+  begin
+    WriteLn('    SKIP: no method symbol found in ORM3 DB');
+    Exit;
+  end;
+
+  Src := TDbGraphSource.Create(ORM3_PATH, 0);
+  try
+    Check(Src.LocateSymbol(QName, AFile, ALine),
+      'ORM3 LocateSymbol(' + QName + ') = True');
+    Check(AFile <> '',
+      'ORM3 LocateSymbol: AFile non-empty for ' + QName);
+    WriteLn('    ORM3 LocateSymbol: ' + QName + ' -> ' + AFile +
+            ':' + IntToStr(ALine));
+  finally
+    Src := nil;
+  end;
+end;
+
 { ---- Smoke 1 (soft): real ORM3 DB ---- }
 
 procedure Test_DbSource_ORM3Smoke;
@@ -276,5 +417,7 @@ initialization
   RegisterTest('DbSource_SchemaMismatch', Test_DbSource_SchemaMismatch);
   RegisterTest('DbSource_UnitUses',       Test_DbSource_UnitUses);
   RegisterTest('DbSource_Refs',           Test_DbSource_Refs);
+  RegisterTest('DbSource_Docs',           Test_DbSource_Docs);
+  RegisterTest('DbSource_ORM3LocateSmoke', Test_DbSource_ORM3LocateSmoke);
   RegisterTest('DbSource_ORM3Smoke',      Test_DbSource_ORM3Smoke);
 end.

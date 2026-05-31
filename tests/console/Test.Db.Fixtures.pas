@@ -408,6 +408,16 @@ begin
         'VALUES (' + IntToStr(UnitId) + ', ''xmldoc'', ''/// unit U'', ' +
         '  ''Unit U summary'', 0, 1, 1)');
 
+      { symbol_docs row for U.TFoo.Bar -- used by Task 4 GetDoc / ResolveCref tests }
+      Conn.ExecSQL(
+        'INSERT INTO symbol_docs(symbol_id, format, raw_block, summary, ' +
+        '  remarks, returns_text, example_text, since_text, deprecated, ' +
+        '  params_json, exceptions_json, seealso_json, start_line, end_line) ' +
+        'VALUES (' + IntToStr(MethodBarId) + ', ''xmldoc'', ''/// Bar'', ' +
+        '  ''Hi'', '''', '''', '''', ''1.0'', 0, ' +
+        '  ''[{"name":"AX","desc":"the x"}]'', ''[]'', ' +
+        '  ''["U.TFoo","https://x"]'', 10, 15)');
+
       { ---- Second file + unit V (for Task 2 unit_uses tests) ---- }
 
       { File row for unit V }
