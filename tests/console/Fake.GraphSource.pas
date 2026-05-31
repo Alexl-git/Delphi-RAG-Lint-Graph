@@ -21,6 +21,23 @@ type
       out ALine: Integer): Boolean;
   end;
 
+  { Loads a caller-supplied topology (built by Test.Graph.Builders) into the
+    VM's TGraphData by copying nodes + edges, then rebuilding the hierarchy.
+    Owns and frees the template graph. }
+  TPreloadedSource = class(TInterfacedObject, IGraphSource)
+  strict private
+    FTemplate: TGraphData;
+  public
+    constructor Create(ATemplate: TGraphData);
+    destructor Destroy; override;
+    function StoreIndex: Integer;
+    function LoadTopology(AData: TGraphData): Boolean;
+    function GetDoc(const AQName: string): TGraphDoc;
+    function ResolveCref(const AText: string): TCrefResolution;
+    function LocateSymbol(const AQName: string; out AFile: string;
+      out ALine: Integer): Boolean;
+  end;
+
 implementation
 
 uses
@@ -90,6 +107,62 @@ begin
     ALine := 12;
     Exit(True);
   end;
+  Result := False;
+end;
+
+constructor TPreloadedSource.Create(ATemplate: TGraphData);
+begin
+  inherited Create;
+  FTemplate := ATemplate;
+end;
+
+destructor TPreloadedSource.Destroy;
+begin
+  FTemplate.Free;
+  inherited;
+end;
+
+function TPreloadedSource.StoreIndex: Integer;
+begin
+  Result := 0;
+end;
+
+function TPreloadedSource.LoadTopology(AData: TGraphData): Boolean;
+var
+  I: Integer;
+  N: TGraphNode;
+begin
+  if AData = nil then Exit(False);
+  AData.Clear;
+  for I := 0 to FTemplate.NodeCount - 1 do
+  begin
+    N := FTemplate.NodeAt(I)^;   { copy the value record }
+    N.ParentIdx := -1;            { re-resolved by BuildHierarchy }
+    AData.AddNode(N);
+  end;
+  for I := 0 to FTemplate.EdgeCount - 1 do
+    AData.AddEdge(FTemplate.EdgeAt(I));
+  AData.BuildHierarchy;
+  Result := True;
+end;
+
+function TPreloadedSource.GetDoc(const AQName: string): TGraphDoc;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+end;
+
+function TPreloadedSource.ResolveCref(const AText: string): TCrefResolution;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  Result.Text := AText;
+  Result.Kind := crkUnresolved;
+end;
+
+function TPreloadedSource.LocateSymbol(const AQName: string; out AFile: string;
+  out ALine: Integer): Boolean;
+begin
+  AFile := '';
+  ALine := 0;
   Result := False;
 end;
 
