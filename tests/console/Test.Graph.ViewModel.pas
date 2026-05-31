@@ -132,6 +132,34 @@ begin
   CheckEqualsInt(7, Length(VM.Projection.Nodes), 'expand-all restores full');
 end;
 
+procedure Test_VMEdgeAggregation;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  I, UaIdx, UbIdx, Found: Integer;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.Collapse('uA');
+  VM.Collapse('uB');
+  Proj := VM.Projection;
+  { Now MA->MB (calls) reroutes to uA->uB, and uA->uB (uses) already exists.
+    Two underlying edges between the same (uA,uB) pair with different kinds
+    must merge into ONE aggregated edge. }
+  UaIdx := VM.Data.FindNodeIndex('uA');
+  UbIdx := VM.Data.FindNodeIndex('uB');
+  Found := 0;
+  for I := 0 to High(Proj.Edges) do
+    if (Proj.Edges[I].SourceIdx = UaIdx) and (Proj.Edges[I].TargetIdx = UbIdx) then
+    begin
+      Inc(Found);
+      CheckEqualsInt(2, Proj.Edges[I].Count, 'merged edge counts 2 underlying');
+      Check(Proj.Edges[I].Aggregated, 'mixed-kind merged edge is aggregated');
+      Check(Proj.Edges[I].Kind = ekOther, 'mixed kinds collapse to ekOther');
+    end;
+  CheckEqualsInt(1, Found, 'exactly one merged uA->uB edge');
+end;
+
 initialization
   RegisterTest('VMLoadsViaSource', Test_VMLoadsViaSource);
   RegisterTest('VMSelectionFiresEvent', Test_VMSelectionFiresEvent);
@@ -139,4 +167,5 @@ initialization
   RegisterTest('VMCollapseHidesDescendants', Test_VMCollapseHidesDescendants);
   RegisterTest('VMCollapseReroutesEdge', Test_VMCollapseReroutesEdge);
   RegisterTest('VMExpandRestores', Test_VMExpandRestores);
+  RegisterTest('VMEdgeAggregation', Test_VMEdgeAggregation);
 end.

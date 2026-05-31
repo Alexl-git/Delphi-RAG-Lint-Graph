@@ -213,10 +213,12 @@ function TGraphViewModel.Projection: TGraphProjection;
 var
   Nodes: TList<TProjNode>;
   Edges: TList<TProjEdge>;
-  I, SI, TI: Integer;
+  EdgeKey: TDictionary<string, Integer>;
+  I, SI, TI, EI: Integer;
   PN: TProjNode;
   PE: TProjEdge;
   E: TGraphEdge;
+  Key: string;
 begin
   Nodes := TList<TProjNode>.Create;
   Edges := TList<TProjEdge>.Create;
@@ -229,21 +231,41 @@ begin
         PN.Dimmed := False;
         Nodes.Add(PN);
       end;
-    for I := 0 to FData.EdgeCount - 1 do
-    begin
-      E := FData.EdgeAt(I);
-      if E.Kind = ekContains then Continue;
-      SI := RepresentativeOf(FData.FindNodeIndex(E.SourceId));
-      TI := RepresentativeOf(FData.FindNodeIndex(E.TargetId));
-      if (SI < 0) or (TI < 0) or (SI = TI) then Continue;
-      PE.SourceIdx := SI;
-      PE.TargetIdx := TI;
-      PE.Kind := E.Kind;
-      PE.Count := 1;
-      PE.Weight := E.Weight;
-      PE.Aggregated := False;
-      PE.Dimmed := False;
-      Edges.Add(PE);
+    { edges with merge by (src,dst) pair }
+    EdgeKey := TDictionary<string, Integer>.Create;
+    try
+      for I := 0 to FData.EdgeCount - 1 do
+      begin
+        E := FData.EdgeAt(I);
+        if E.Kind = ekContains then Continue;
+        SI := RepresentativeOf(FData.FindNodeIndex(E.SourceId));
+        TI := RepresentativeOf(FData.FindNodeIndex(E.TargetId));
+        if (SI < 0) or (TI < 0) or (SI = TI) then Continue;
+        Key := IntToStr(SI) + '|' + IntToStr(TI);
+        if EdgeKey.TryGetValue(Key, EI) then
+        begin
+          PE := Edges[EI];
+          Inc(PE.Count);
+          PE.Weight := PE.Weight + E.Weight;
+          if PE.Kind <> E.Kind then PE.Kind := ekOther;
+          PE.Aggregated := True;
+          Edges[EI] := PE;
+        end
+        else
+        begin
+          PE.SourceIdx := SI;
+          PE.TargetIdx := TI;
+          PE.Kind := E.Kind;
+          PE.Count := 1;
+          PE.Weight := E.Weight;
+          PE.Aggregated := False;
+          PE.Dimmed := False;
+          EdgeKey.Add(Key, Edges.Count);
+          Edges.Add(PE);
+        end;
+      end;
+    finally
+      EdgeKey.Free;
     end;
     Result.Nodes := Nodes.ToArray;
     Result.Edges := Edges.ToArray;
