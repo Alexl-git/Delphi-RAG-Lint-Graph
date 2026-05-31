@@ -33,6 +33,15 @@ type
     Edges: TArray<TProjEdge>;
   end;
 
+  TNavEntry = record
+    StoreIndex: Integer;
+    SelectedId: string;
+    Collapsed:  TArray<string>;
+    FocusId:    string;
+    FocusHops:  Integer;
+    Isolate:    Boolean;
+  end;
+
   TGraphVMNotify = procedure(Sender: TObject) of object;
 
   IGraphViewModel = interface
@@ -59,6 +68,15 @@ type
     procedure ClearFocus;
     function  GetIsolate: Boolean;
     procedure SetIsolate(AValue: Boolean);
+    procedure NavigateTo(const AId: string);
+    function  ResolveCrossDb(const AName: string): TCrossDbResolution;
+    procedure JumpToCrossDb(const AName: string);
+    procedure Back;
+    function  CanGoBack: Boolean;
+    function  ResolveCref(const AText: string): TCrefResolution;
+    function  LocateSymbol(const AId: string; out AFile: string;
+      out ALine: Integer): Boolean;
+    procedure SetOnStoreChanged(AValue: TGraphVMNotify);
   end;
 
   TGraphViewModel = class(TInterfacedObject, IGraphViewModel)
@@ -74,8 +92,12 @@ type
     FFocusId:     string;
     FFocusHops:   Integer;
     FIsolate:     Boolean;
+    FNavStack:    TStack<TNavEntry>;
+    FOnStoreChanged: TGraphVMNotify;
+    FRestoring:   Boolean;
     procedure DoChanged;
     procedure DoSelectionChanged;
+    procedure DoStoreChanged;
     procedure Reload;
     function NodeHasChildren(AIndex: Integer): Boolean;
     function NodeIsCollapsed(AIndex: Integer): Boolean;
@@ -83,6 +105,9 @@ type
     function RepresentativeOf(AIndex: Integer): Integer;
     procedure ComputeNeighborhood(AStart, AHops: Integer;
       AEdges: TList<TProjEdge>; ASet: TDictionary<Integer, Boolean>);
+    function  CaptureState: TNavEntry;
+    procedure RestoreState(const AEntry: TNavEntry);
+    procedure ExpandAncestors(const AId: string);
   public
     constructor Create;
     destructor Destroy; override;
@@ -108,6 +133,15 @@ type
     procedure ClearFocus;
     function  GetIsolate: Boolean;
     procedure SetIsolate(AValue: Boolean);
+    procedure NavigateTo(const AId: string);
+    function  ResolveCrossDb(const AName: string): TCrossDbResolution;
+    procedure JumpToCrossDb(const AName: string);
+    procedure Back;
+    function  CanGoBack: Boolean;
+    function  ResolveCref(const AText: string): TCrefResolution;
+    function  LocateSymbol(const AId: string; out AFile: string;
+      out ALine: Integer): Boolean;
+    procedure SetOnStoreChanged(AValue: TGraphVMNotify);
   end;
 
 implementation
@@ -122,10 +156,13 @@ begin
   FFocusId := '';
   FFocusHops := 1;
   FIsolate := False;
+  FNavStack := TStack<TNavEntry>.Create;
+  FRestoring := False;
 end;
 
 destructor TGraphViewModel.Destroy;
 begin
+  FNavStack.Free;
   FCollapsed.Free;
   FData.Free;
   inherited;
@@ -143,9 +180,12 @@ end;
 
 procedure TGraphViewModel.Reload;
 begin
-  FSelectedId := '';
-  FCollapsed.Clear;
-  FFocusId := '';
+  if not FRestoring then
+  begin
+    FSelectedId := '';
+    FCollapsed.Clear;
+    FFocusId := '';
+  end;
   FData.Clear;
   if FSource <> nil then
     FSource.LoadTopology(FData);
@@ -436,6 +476,150 @@ begin
     FIsolate := AValue;
     DoChanged;
   end;
+end;
+
+procedure TGraphViewModel.DoStoreChanged;
+begin
+  if Assigned(FOnStoreChanged) then FOnStoreChanged(Self);
+end;
+
+procedure TGraphViewModel.SetOnStoreChanged(AValue: TGraphVMNotify);
+begin
+  FOnStoreChanged := AValue;
+end;
+
+function TGraphViewModel.CaptureState: TNavEntry;
+var
+  Key: string;
+  L: TList<string>;
+begin
+  Result.StoreIndex := FActiveStore;
+  Result.SelectedId := FSelectedId;
+  Result.FocusId := FFocusId;
+  Result.FocusHops := FFocusHops;
+  Result.Isolate := FIsolate;
+  L := TList<string>.Create;
+  try
+    for Key in FCollapsed.Keys do
+      L.Add(Key);
+    Result.Collapsed := L.ToArray;
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TGraphViewModel.RestoreState(const AEntry: TNavEntry);
+var
+  Key: string;
+begin
+  if AEntry.StoreIndex <> FActiveStore then
+  begin
+    FRestoring := True;
+    try
+      OpenStore(AEntry.StoreIndex);
+    finally
+      FRestoring := False;
+    end;
+  end;
+  FCollapsed.Clear;
+  for Key in AEntry.Collapsed do
+    FCollapsed.AddOrSetValue(Key, True);
+  FFocusId := AEntry.FocusId;
+  FFocusHops := AEntry.FocusHops;
+  FIsolate := AEntry.Isolate;
+  FSelectedId := AEntry.SelectedId;
+  DoChanged;
+  DoSelectionChanged;
+end;
+
+procedure TGraphViewModel.ExpandAncestors(const AId: string);
+var
+  Idx, P: Integer;
+begin
+  Idx := FData.FindNodeIndex(AId);
+  if Idx < 0 then Exit;
+  P := FData.ParentIndexOf(Idx);
+  while P >= 0 do
+  begin
+    FCollapsed.Remove(FData.NodeAt(P)^.Id);
+    P := FData.ParentIndexOf(P);
+  end;
+end;
+
+procedure TGraphViewModel.NavigateTo(const AId: string);
+begin
+  FNavStack.Push(CaptureState);
+  ExpandAncestors(AId);
+  FCollapsed.Remove(AId);
+  FSelectedId := AId;
+  DoChanged;
+  DoSelectionChanged;
+end;
+
+function TGraphViewModel.ResolveCrossDb(const AName: string): TCrossDbResolution;
+begin
+  if FCatalog <> nil then
+    Result := FCatalog.ResolveAcrossStores(AName)
+  else
+    FillChar(Result, SizeOf(Result), 0);
+end;
+
+procedure TGraphViewModel.JumpToCrossDb(const AName: string);
+var
+  Res: TCrossDbResolution;
+begin
+  Res := ResolveCrossDb(AName);
+  if not Res.Found then Exit;
+  FNavStack.Push(CaptureState);
+  if Res.StoreIndex <> FActiveStore then
+  begin
+    FRestoring := True;
+    try
+      OpenStore(Res.StoreIndex);
+    finally
+      FRestoring := False;
+    end;
+    DoStoreChanged;
+  end;
+  FSelectedId := Res.TargetId;
+  DoChanged;
+  DoSelectionChanged;
+end;
+
+procedure TGraphViewModel.Back;
+var
+  Entry: TNavEntry;
+begin
+  if FNavStack.Count = 0 then Exit;
+  Entry := FNavStack.Pop;
+  RestoreState(Entry);
+end;
+
+function TGraphViewModel.CanGoBack: Boolean;
+begin
+  Result := FNavStack.Count > 0;
+end;
+
+function TGraphViewModel.ResolveCref(const AText: string): TCrefResolution;
+begin
+  if FSource <> nil then
+    Result := FSource.ResolveCref(AText)
+  else
+  begin
+    FillChar(Result, SizeOf(Result), 0);
+    Result.Text := AText;
+    Result.Kind := crkUnresolved;
+  end;
+end;
+
+function TGraphViewModel.LocateSymbol(const AId: string; out AFile: string;
+  out ALine: Integer): Boolean;
+begin
+  AFile := ''; ALine := 0;
+  if FSource <> nil then
+    Result := FSource.LocateSymbol(AId, AFile, ALine)
+  else
+    Result := False;
 end;
 
 procedure TGraphViewModel.ComputeNeighborhood(AStart, AHops: Integer;

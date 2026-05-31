@@ -12,6 +12,7 @@ uses
   Test.Graph.Source in 'Test.Graph.Source.pas',
   DragLint.Graph.ViewModel in '..\..\src\control\DragLint.Graph.ViewModel.pas',
   Test.Graph.Builders in 'Test.Graph.Builders.pas',
+  Fake.DbCatalog in 'Fake.DbCatalog.pas',
   Test.Graph.ViewModel in 'Test.Graph.ViewModel.pas';
 
 begin

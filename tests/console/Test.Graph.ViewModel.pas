@@ -11,7 +11,8 @@ uses
   DragLint.Graph.Source,
   DragLint.Graph.ViewModel,
   Test.Graph.Builders,
-  Fake.GraphSource;
+  Fake.GraphSource,
+  Fake.DbCatalog;
 
 var
   GChangeCount: Integer;
@@ -212,6 +213,48 @@ begin
   CheckEqualsInt(0, DimmedCount, 'clearing focus undims all');
 end;
 
+procedure Test_VMNavBackStack;
+var
+  VM: IGraphViewModel;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.SelectNode('uA');
+  Check(not VM.CanGoBack, 'no history initially');
+  VM.NavigateTo('uB');
+  CheckEqualsStr('uB', VM.SelectedId, 'navigated to uB');
+  Check(VM.CanGoBack, 'history after navigate');
+  VM.Back;
+  CheckEqualsStr('uA', VM.SelectedId, 'back restores prior selection');
+  Check(not VM.CanGoBack, 'history empty after back');
+end;
+
+procedure Test_VMCrossDbJump;
+var
+  VM: IGraphViewModel;
+  Res: TCrossDbResolution;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetCatalog(TFakeDbCatalog.Create);
+  VM.OpenStore(0);
+  CheckEqualsInt(0, VM.ActiveStoreIndex, 'start in store 0');
+  Check(VM.Data.FindNodeIndex('A') >= 0, 'store 0 has A');
+
+  Res := VM.ResolveCrossDb('B');
+  Check(Res.Found, 'B resolves in catalog');
+  CheckEqualsInt(1, Res.StoreIndex, 'B is in store 1');
+
+  VM.JumpToCrossDb('B');
+  CheckEqualsInt(1, VM.ActiveStoreIndex, 'jumped to store 1');
+  Check(VM.Data.FindNodeIndex('B') >= 0, 'store 1 has B');
+  CheckEqualsStr('B', VM.SelectedId, 'target selected after jump');
+
+  Check(VM.CanGoBack, 'jump pushed history');
+  VM.Back;
+  CheckEqualsInt(0, VM.ActiveStoreIndex, 'back returns to store 0');
+  Check(VM.Data.FindNodeIndex('A') >= 0, 'store 0 reloaded on back');
+end;
+
 initialization
   RegisterTest('VMLoadsViaSource', Test_VMLoadsViaSource);
   RegisterTest('VMSelectionFiresEvent', Test_VMSelectionFiresEvent);
@@ -223,4 +266,6 @@ initialization
   RegisterTest('VMFocusDims', Test_VMFocusDims);
   RegisterTest('VMFocusIsolateHides', Test_VMFocusIsolateHides);
   RegisterTest('VMClearFocus', Test_VMClearFocus);
+  RegisterTest('VMNavBackStack', Test_VMNavBackStack);
+  RegisterTest('VMCrossDbJump', Test_VMCrossDbJump);
 end.
