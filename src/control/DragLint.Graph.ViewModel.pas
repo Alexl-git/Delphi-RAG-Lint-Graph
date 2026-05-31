@@ -26,6 +26,8 @@ type
     Weight:     Double;
     Aggregated: Boolean;    { Count>1 or mixed kinds }
     Dimmed:     Boolean;
+    Section:    string;     { for ekUses: 'interface'|'implementation'|... }
+    CrossDb:    Boolean;    { target lives in a different store (P4: always False) }
   end;
 
   TGraphProjection = record
@@ -308,6 +310,9 @@ begin
           PE.Weight := PE.Weight + E.Weight;
           if PE.Kind <> E.Kind then PE.Kind := ekOther;
           PE.Aggregated := True;
+          { adopt first non-empty section }
+          if (PE.Section = '') and (E.Label_ <> '') then
+            PE.Section := E.Label_;
           Edges[EI] := PE;
         end
         else
@@ -319,6 +324,8 @@ begin
           PE.Weight := E.Weight;
           PE.Aggregated := False;
           PE.Dimmed := False;
+          PE.Section := E.Label_;
+          PE.CrossDb := False;
           EdgeKey.Add(Key, Edges.Count);
           Edges.Add(PE);
         end;

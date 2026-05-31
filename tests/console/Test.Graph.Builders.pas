@@ -46,6 +46,7 @@ begin
   Result.AddEdge(E);
   FillChar(E, SizeOf(E), 0);
   E.SourceId := 'uA'; E.TargetId := 'uB'; E.Kind := ekUses; E.Weight := 1.0;
+  E.Label_ := 'interface';
   Result.AddEdge(E);
 
   Result.BuildHierarchy;  { adds synthetic @project root over uA, uB }

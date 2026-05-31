@@ -255,6 +255,32 @@ begin
   Check(VM.Data.FindNodeIndex('A') >= 0, 'store 0 reloaded on back');
 end;
 
+procedure Test_VMProjEdgeSection;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  I, UaIdx, UbIdx: Integer;
+  Found: Boolean;
+begin
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.Collapse('uA');
+  Proj := VM.Projection;
+  UaIdx := VM.Data.FindNodeIndex('uA');
+  UbIdx := VM.Data.FindNodeIndex('uB');
+  Found := False;
+  for I := 0 to High(Proj.Edges) do
+    if (Proj.Edges[I].Kind = ekUses)
+       and (Proj.Edges[I].SourceIdx = UaIdx)
+       and (Proj.Edges[I].TargetIdx = UbIdx) then
+    begin
+      Found := True;
+      CheckEqualsStr('interface', Proj.Edges[I].Section,
+        'uses edge section carries label from raw edge');
+    end;
+  Check(Found, 'uA->uB uses edge found in projection');
+end;
+
 initialization
   RegisterTest('VMLoadsViaSource', Test_VMLoadsViaSource);
   RegisterTest('VMSelectionFiresEvent', Test_VMSelectionFiresEvent);
@@ -268,4 +294,5 @@ initialization
   RegisterTest('VMClearFocus', Test_VMClearFocus);
   RegisterTest('VMNavBackStack', Test_VMNavBackStack);
   RegisterTest('VMCrossDbJump', Test_VMCrossDbJump);
+  RegisterTest('VMProjEdgeSection', Test_VMProjEdgeSection);
 end.
