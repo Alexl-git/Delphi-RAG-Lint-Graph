@@ -21,6 +21,19 @@ unit DragLint.Graph.Control;
        node click raises OnCrossDbJump for the host.
      * Diamond/hexagon/cylinder/tag/triangle shapes fall back to a labelled
        rectangle for P4; ellipse/box/roundbox are distinct.
+
+   Hover-highlight intentionally removed (bug F1):
+     MouseMove no longer hit-tests nodes and does NOT call Invalidate unless
+     a pan drag is in progress.  This eliminates the continuous repaint storm
+     over large graphs (~16k nodes).  Selection highlight (blue border) still
+     works: clicking calls FVM.SelectNode then Invalidate.
+
+   Projection cache:
+     FProjection/FProjValid cache the last TGraphProjection.  The cache is
+     invalidated (FProjValid := False) only on VM state changes (Changed,
+     StoreChanged, Bind).  Pan/zoom/scroll call Invalidate without
+     invalidating the cache, so Paint reuses the cached projection for those
+     fast redraws -- no O(nodes+edges) rebuild per pan step.
 *)
 
 interface
@@ -68,7 +81,10 @@ type
     FDragStartPt: TPoint;
     FDragStartOX: Double;
     FDragStartOY: Double;
-    FHoverId:     string;
+
+    { Projection cache -- rebuilt only when VM state changes }
+    FProjection: TGraphProjection;
+    FProjValid:  Boolean;
 
     { Optional progressive relayout timer (Phase-0 proven) }
     FAnimTimer:   TTimer;
@@ -76,11 +92,12 @@ type
     { Published settings }
     FShowLegend: Boolean;
 
-    FOnNodeClick:      TGraphNodeEvent;
-    FOnNodeHover:      TGraphHoverEvent;
+    FOnNodeClick:       TGraphNodeEvent;
+    FOnNodeHover:       TGraphHoverEvent;
     FOnSelectionChange: TNotifyEvent;
-    FOnOpenSource:     TGraphIdEvent;
-    FOnCrossDbJump:    TGraphNameEvent;
+    FOnOpenSource:      TGraphIdEvent;
+    FOnCrossDbJump:     TGraphNameEvent;
+    FOnViewChanged:     TNotifyEvent;
 
     procedure AnimTick(Sender: TObject);
 
@@ -98,12 +115,14 @@ type
     function  HitTestProjEdge(SX, SY: Integer;
                               const AProj: TGraphProjection): Integer;
 
+    { Returns the cached projection, rebuilding it if necessary. }
+    function  CurrentProjection: TGraphProjection;
+
     procedure DrawEdges(const AProj: TGraphProjection);
     procedure DrawNodes(const AProj: TGraphProjection);
     procedure DrawLegend(const AProj: TGraphProjection);
     procedure DrawArrowHead(PA, PB: TPoint);
 
-    procedure CMMouseLeave(var Msg: TMessage); message CM_MOUSELEAVE;
   protected
     procedure Paint; override;
     procedure MouseDown(Button: TMouseButton; Shift: TShiftState;
@@ -151,6 +170,10 @@ type
                                                   write FOnOpenSource;
     property OnCrossDbJump:      TGraphNameEvent  read FOnCrossDbJump
                                                   write FOnCrossDbJump;
+    { Fired after VM state changes (collapse/focus/select/nav/store/show-all).
+      Host can use this to refresh UI elements that read VM counts. }
+    property OnViewChanged:      TNotifyEvent     read FOnViewChanged
+                                                  write FOnViewChanged;
   end;
 
 implementation
@@ -160,7 +183,6 @@ const
   CL_BG       = TColor($00282828);
   CL_LABEL    = TColor($00E0E0E0);
   CL_SEL_BORDER = TColor($000080FF);  { 2-px selection border }
-  CL_HOV_BORDER = TColor($0066D9EF);  { cyan hover border }
   CL_EXT_BORDER = TColor($00808080);  { gray dashed for external }
   CL_DEP_BORDER = TColor($000000FF);  { red for deprecated }
 
@@ -186,6 +208,7 @@ begin
   FOffsetX := 0;
   FOffsetY := 0;
   FShowLegend := True;
+  FProjValid := False;
 
   FAnimTimer := TTimer.Create(Self);
   FAnimTimer.Enabled  := False;
@@ -205,7 +228,7 @@ end;
 procedure TDragLintGraphControl.Bind(const AVM: IGraphViewModel);
 begin
   FVM := AVM;
-  FHoverId := '';
+  FProjValid := False;
   if FVM <> nil then
   begin
     FVM.SetOnChanged(HandleVMChanged);
@@ -217,13 +240,27 @@ end;
 
 procedure TDragLintGraphControl.HandleVMChanged(Sender: TObject);
 begin
+  FProjValid := False;
   Invalidate;
+  if Assigned(FOnViewChanged) then FOnViewChanged(Self);
 end;
 
 procedure TDragLintGraphControl.HandleVMStoreChanged(Sender: TObject);
 begin
+  FProjValid := False;
   Relayout;
   Invalidate;
+  if Assigned(FOnViewChanged) then FOnViewChanged(Self);
+end;
+
+function TDragLintGraphControl.CurrentProjection: TGraphProjection;
+begin
+  if not FProjValid then
+  begin
+    FProjection := FVM.Projection;
+    FProjValid := True;
+  end;
+  Result := FProjection;
 end;
 
 procedure TDragLintGraphControl.Relayout;
@@ -255,6 +292,8 @@ var
 begin
   if FVM = nil then Exit;
   Done := FLayout.Step(FVM.Data, 1);
+  { layout moved nodes -> world coords changed -> projection must rebuild }
+  FProjValid := False;
   Invalidate;
   if Done then FAnimTimer.Enabled := False;
 end;
@@ -512,11 +551,9 @@ begin
       FillCol := RGB((FR + BgR) div 2, (FG + BgG) div 2, (FB + BgB) div 2);
     end;
 
-    { Selection / hover override }
+    { Selection override -- hover highlight removed (bug F1) }
     if N.Id = SelId then
       Canvas.Pen.Color := CL_SEL_BORDER
-    else if N.Id = FHoverId then
-      Canvas.Pen.Color := CL_HOV_BORDER
     else if N.Deprecated then
       Canvas.Pen.Color := CL_DEP_BORDER
     else if N.IsExternal then
@@ -685,7 +722,8 @@ begin
     Exit;
   end;
 
-  Proj := FVM.Projection;
+  { Use the cached projection -- rebuilds only when FProjValid = False }
+  Proj := CurrentProjection;
 
   DrawEdges(Proj);
   DrawNodes(Proj);
@@ -711,12 +749,16 @@ begin
   SetFocus;
   if FVM = nil then Exit;
 
-  Proj := FVM.Projection;
+  { Use cached projection for hit-testing; no topology change here. }
+  Proj := CurrentProjection;
   NIdx := HitTestProjNode(X, Y, Proj);
   if NIdx >= 0 then
   begin
     N := FVM.Data.NodeAt(Proj.Nodes[NIdx].NodeIdx);
     FVM.SelectNode(N.Id);
+    { Selection changes the border color but not topology: Invalidate only,
+      do NOT invalidate the cached projection. }
+    Invalidate;
     if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
     if (ssCtrl in Shift) and Assigned(FOnOpenSource) then
       FOnOpenSource(Self, N.Id)
@@ -751,45 +793,20 @@ begin
   FDragStartOY := FOffsetY;
 end;
 
+{ MouseMove only handles pan.  Hover hit-testing and hover-driven Invalidate
+  have been removed (bug F1): moving the mouse over the canvas causes NO
+  repaint unless a drag (pan) is in progress. }
 procedure TDragLintGraphControl.MouseMove(Shift: TShiftState; X, Y: Integer);
-var
-  Proj:   TGraphProjection;
-  NIdx:   Integer;
-  NewId:  string;
-  N:      PGraphNode;
 begin
   inherited;
   if FDragging then
   begin
     FOffsetX := FDragStartOX - (X - FDragStartPt.X) / FZoom;
     FOffsetY := FDragStartOY - (Y - FDragStartPt.Y) / FZoom;
-    Invalidate;
-    Exit;
-  end;
-
-  if FVM = nil then Exit;
-  Proj := FVM.Projection;
-  NIdx := HitTestProjNode(X, Y, Proj);
-  if NIdx >= 0 then
-  begin
-    N := FVM.Data.NodeAt(Proj.Nodes[NIdx].NodeIdx);
-    NewId := N.Id;
-  end
-  else
-    NewId := '';
-
-  if NewId <> FHoverId then
-  begin
-    FHoverId := NewId;
-    if Assigned(FOnNodeHover) then
-    begin
-      if NIdx >= 0 then
-        FOnNodeHover(Self, FVM.Data.NodeAt(Proj.Nodes[NIdx].NodeIdx))
-      else
-        FOnNodeHover(Self, nil);
-    end;
+    { Pan does NOT invalidate the projection cache -- topology unchanged. }
     Invalidate;
   end;
+  { No hover hit-test, no Invalidate when not dragging. }
 end;
 
 procedure TDragLintGraphControl.MouseUp(Button: TMouseButton;
@@ -810,7 +827,7 @@ begin
   inherited;
   if FVM = nil then Exit;
   MP   := ScreenToClient(Mouse.CursorPos);
-  Proj := FVM.Projection;
+  Proj := CurrentProjection;
   NIdx := HitTestProjNode(MP.X, MP.Y, Proj);
   if NIdx < 0 then Exit;
   N := FVM.Data.NodeAt(Proj.Nodes[NIdx].NodeIdx);
@@ -864,17 +881,8 @@ begin
   FZoom := NewZoom;
   FOffsetX := MouseWorld.X - (Local.X - Width  / 2) / FZoom;
   FOffsetY := MouseWorld.Y - (Local.Y - Height / 2) / FZoom;
+  { Zoom does NOT invalidate the projection cache -- topology unchanged. }
   Invalidate;
-end;
-
-procedure TDragLintGraphControl.CMMouseLeave(var Msg: TMessage);
-begin
-  if FHoverId <> '' then
-  begin
-    FHoverId := '';
-    if Assigned(FOnNodeHover) then FOnNodeHover(Self, nil);
-    Invalidate;
-  end;
 end;
 
 end.

@@ -19,16 +19,19 @@ uses
 type
   TfrmMain = class(TForm)
   private
-    FGraph:   TDragLintGraphControl;
-    FStatus:  TStatusBar;
-    FVM:      IGraphViewModel;
-    FCatalog: IDbCatalog;
+    FGraph:      TDragLintGraphControl;
+    FStatus:     TStatusBar;
+    FShowAllBtn: TButton;
+    FVM:         IGraphViewModel;
+    FCatalog:    IDbCatalog;
     procedure CreateControls;
     procedure ParseAndLoad;
     procedure GraphNodeClick(Sender: TObject; const A: TGraphNodeEventArgs);
-    procedure GraphNodeHover(Sender: TObject; ANode: PGraphNode);
     procedure GraphOpenSource(Sender: TObject; const AId: string);
     procedure GraphCrossDbJump(Sender: TObject; const AName: string);
+    procedure GraphViewChanged(Sender: TObject);
+    procedure ShowAllBtnClick(Sender: TObject);
+    procedure UpdateShowAllButton;
   public
     constructor Create(AOwner: TComponent); override;
   end;
@@ -62,10 +65,22 @@ begin
   FGraph := TDragLintGraphControl.Create(Self);
   FGraph.Parent := Self;
   FGraph.Align := alClient;
-  FGraph.OnNodeClick   := GraphNodeClick;
-  FGraph.OnNodeHover   := GraphNodeHover;
-  FGraph.OnOpenSource  := GraphOpenSource;
-  FGraph.OnCrossDbJump := GraphCrossDbJump;
+  FGraph.OnNodeClick    := GraphNodeClick;
+  FGraph.OnOpenSource   := GraphOpenSource;
+  FGraph.OnCrossDbJump  := GraphCrossDbJump;
+  FGraph.OnViewChanged  := GraphViewChanged;
+
+  { "Show all units / Show top N units" toggle button anchored top-right }
+  FShowAllBtn := TButton.Create(Self);
+  FShowAllBtn.Parent  := Self;
+  FShowAllBtn.Anchors := [akTop, akRight];
+  FShowAllBtn.Width   := 220;
+  FShowAllBtn.Height  := 26;
+  FShowAllBtn.Top     := 4;
+  FShowAllBtn.Left    := ClientWidth - FShowAllBtn.Width - 4;
+  FShowAllBtn.Caption := '';
+  FShowAllBtn.Visible := False;
+  FShowAllBtn.OnClick := ShowAllBtnClick;
 end;
 
 procedure TfrmMain.ParseAndLoad;
@@ -100,6 +115,7 @@ begin
   begin
     FGraph.Bind(FVM);
     FStatus.SimpleText := 'Pass --db <drag-lint.sqlite> to load a graph.';
+    UpdateShowAllButton;
     Exit;
   end;
 
@@ -114,6 +130,7 @@ begin
     begin
       FGraph.Bind(FVM);
       FStatus.SimpleText := 'Error opening store 0: ' + E.Message;
+      UpdateShowAllButton;
       Exit;
     end;
   end;
@@ -125,6 +142,48 @@ begin
   else
     FStatus.SimpleText := Format('Loaded %s: %d nodes',
       [ExtractFileName(Paths[0]), FVM.Data.NodeCount]);
+
+  { Force a projection pass so FHiddenTopLevelCount is current before
+    UpdateShowAllButton reads it -- Bind only schedules a paint. }
+  FVM.Projection;
+  UpdateShowAllButton;
+end;
+
+procedure TfrmMain.GraphViewChanged(Sender: TObject);
+begin
+  UpdateShowAllButton;
+end;
+
+procedure TfrmMain.UpdateShowAllButton;
+var
+  N: Integer;
+begin
+  if FVM = nil then
+  begin
+    FShowAllBtn.Visible := False;
+    Exit;
+  end;
+  N := FVM.HiddenTopLevelCount;
+  if (not FVM.ShowAllTopLevel) and (N > 0) then
+  begin
+    FShowAllBtn.Caption := Format('Show all units (%d hidden)', [N]);
+    FShowAllBtn.Visible := True;
+  end
+  else if FVM.ShowAllTopLevel then
+  begin
+    FShowAllBtn.Caption := 'Show top ' + IntToStr(FVM.TopLevelLimit) + ' units';
+    FShowAllBtn.Visible := True;
+  end
+  else
+    FShowAllBtn.Visible := False;
+end;
+
+procedure TfrmMain.ShowAllBtnClick(Sender: TObject);
+begin
+  if FVM = nil then Exit;
+  { Toggle: VM fires OnChanged -> control repaints + fires OnViewChanged
+    -> UpdateShowAllButton refreshes caption/visibility. }
+  FVM.SetShowAllTopLevel(not FVM.ShowAllTopLevel);
 end;
 
 procedure TfrmMain.GraphNodeClick(Sender: TObject; const A: TGraphNodeEventArgs);
@@ -145,15 +204,6 @@ begin
   if Doc.HasDoc and (Doc.Summary <> '') then
     Info := Info + '  -- ' + Doc.Summary;
   FStatus.SimpleText := Info;
-end;
-
-procedure TfrmMain.GraphNodeHover(Sender: TObject; ANode: PGraphNode);
-begin
-  if ANode = nil then
-    FStatus.SimpleText :=
-      'Pan: drag empty area | Zoom: mouse wheel | Click node to select | Ctrl+click to open source'
-  else
-    FStatus.SimpleText := 'Hover: ' + ANode.Id;
 end;
 
 procedure TfrmMain.GraphOpenSource(Sender: TObject; const AId: string);
