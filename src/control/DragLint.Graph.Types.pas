@@ -89,6 +89,47 @@ type
     Weight:   Double;       { for spring strength; default 1.0 }
   end;
 
+  TDocParam = record
+    Name: string;
+    Desc: string;
+  end;
+
+  TDocException = record
+    TypeName: string;
+    Desc: string;
+  end;
+
+  TGraphDoc = record
+    HasDoc:      Boolean;          { False => undocumented (no symbol_docs row) }
+    Format:      string;           { 'xmldoc' | 'pasdoc' | 'oneline' | 'loose' }
+    Summary:     string;
+    Remarks:     string;
+    ReturnsText: string;
+    ExampleText: string;
+    SinceText:   string;
+    Deprecated:  Boolean;
+    Params:      TArray<TDocParam>;
+    Exceptions:  TArray<TDocException>;
+    SeeAlso:     TArray<string>;   { verbatim cref strings }
+  end;
+
+  TCrefKind = (crkUrl, crkResolved, crkAmbiguous, crkUnresolved);
+
+  TCrefResolution = record
+    Kind:       TCrefKind;
+    Text:       string;            { original cref text }
+    Url:        string;            { when crkUrl }
+    TargetId:   string;            { when crkResolved }
+    StoreIndex: Integer;           { when crkResolved }
+    Candidates: TArray<string>;    { when crkAmbiguous }
+  end;
+
+  TCrossDbResolution = record
+    Found:      Boolean;
+    StoreIndex: Integer;
+    TargetId:   string;
+  end;
+
   TGraphData = class
   strict private
     FNodes: TList<TGraphNode>;
