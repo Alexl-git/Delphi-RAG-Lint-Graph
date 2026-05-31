@@ -28,12 +28,12 @@ Inputs that shaped this design, from the drag-lint team's contract docs under
    visuals and the planned Firebird-snapshot / ORM-linker tiers are deferred.
 
 **Deconfliction note:** `Delphi-RAG-lint/docs/superpowers/specs/2026-05-29-graphing-
-component-design.md` is a *parked* drag-lint-side design for a same-named
+component-design.md` is a **declined** drag-lint-side proposal for a same-named
 `TDragLintGraphControl` / `drag-lint-graph.exe` built on **WebView2 + Cytoscape.js**
-with an HTTP dashboard. This repo is the **pure-VCL realization that supersedes
-it** (README: no WebView2, no HTML/JS). Open collisions to settle later: identical
-component + exe names, and palette page name (`'drag-lint'` there vs
-`'Delphi-RAG-Lint'` here). No change of direction: pure-VCL is the point of this repo.
+with an HTTP dashboard. It was rejected in favor of this **pure-VCL** repo (README:
+no WebView2, no HTML/JS) - confirmed by the user. The shared `TDragLintGraphControl`
+/ `drag-lint-graph.exe` names are intentionally inherited by this implementation;
+this repo's palette page is `'Delphi-RAG-Lint'`.
 
 Ultimate goal: a ship-ready, reusable VCL component. The eventual headline feature
 is semantic / level-of-detail (LOD) zoom over 40k-node Micronite-scale graphs
@@ -114,14 +114,25 @@ There are **no cross-DB foreign keys**; each `--db` is an independent store. We 
   given store, and (b) **resolve a qname/name across the set** in priority order
   (first-hit-wins, mirroring the LSP), returning `(storeIndex, symbol)`.
 - A reference whose target lives in another store renders as a **cross-DB link
-  affordance** (distinct marker/stub, not a merged edge). Activating it performs a
-  **cross-DB jump**: resolve via `IDbCatalog`, swap the active `IGraphSource` to the
-  target store, load that store's graph, and focus the target symbol.
+  affordance** (distinct marker/stub, not a merged edge). Activating it resolves the
+  target via `IDbCatalog` and is handled by **host policy** (below).
+- **Host-policy jump seam (key design point).** The ViewModel does not assume a
+  window model. It resolves the target `(storeIndex, symbol)` and raises
+  `OnCrossDbJumpRequested`. The host decides what to do:
+  - **This round (in-place):** the host calls `OpenStore(targetIndex)` +
+    `NavigateTo(target)` on the *same* control - swap the active `IGraphSource`, load
+    the target store's graph, focus the symbol. `JumpToCrossDb` is a convenience that
+    does exactly this in-place.
+  - **Later (host-only change):** spawn a new form / split view bound to a fresh
+    ViewModel opened on the target store. No control/VM changes required - hence we do
+    not build multi-window now (it is not simpler, and would add window management
+    with no benefit this round).
 - A **navigation back-stack** records `(storeIndex, selectedId, collapse/focus
   state)` per entry; Back pops and restores - across store boundaries too. Recently
   loaded graphs may be cached to make Back cheap on large stores (optimization, not
   required for correctness).
-- **Split-screen / second window** for two stores side by side is a deferred option.
+- **Split-screen / second window** for two stores side by side is a deferred option,
+  enabled purely by the host-policy seam above.
 
 `db_index` therefore identifies the active store and the jump target; it is not a
 per-node merge tag in our model.
@@ -260,7 +271,8 @@ IGraphViewModel = interface
   procedure SetFocus(const AId: string; AHops: Integer = 1);
   procedure ClearFocus;
   procedure NavigateTo(const AId: string);             // same-store
-  procedure JumpToCrossDb(const AName: string);        // resolve via catalog + swap store
+  function  ResolveCrossDb(const AName: string): TCrossDbResolution;  // (storeIndex, symbol)
+  procedure JumpToCrossDb(const AName: string);        // convenience: in-place resolve + swap + focus
   procedure Back;
   function  ResolveCref(const AText: string): TCrefResolution;
   procedure OpenSource(const AId: string);             // host opener callback
@@ -268,6 +280,7 @@ IGraphViewModel = interface
   property  OnChanged: IEvent;
   property  OnSelectionChanged: IEvent;
   property  OnStoreChanged: IEvent;
+  property  OnCrossDbJumpRequested: IEvent;            // host policy: in-place vs new form/split
   property  Isolate: Boolean read ... write ...;
 end;
 ```
