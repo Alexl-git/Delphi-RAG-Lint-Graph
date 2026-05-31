@@ -412,6 +412,187 @@ begin
   end;
 end;
 
+{ ---- Task 5 (deterministic): TDbCatalog cross-store resolution ---- }
+
+procedure Test_DbCatalog_CrossStoreResolve;
+var
+  Path0:   string;
+  Path1:   string;
+  Cat:     IDbCatalog;
+  Res:     TCrossDbResolution;
+  Src0a:   IGraphSource;
+  Src0b:   IGraphSource;
+  D:       TGraphData;
+begin
+  Path0 := CreateTempV6DbNamed('A');
+  Path1 := CreateTempV6DbNamed('B');
+  try
+    Cat := TDbCatalog.Create([Path0, Path1]);
+
+    { StoreCount }
+    CheckEqualsInt(2, Cat.StoreCount, 'StoreCount = 2');
+
+    { StorePath }
+    CheckEqualsStr(Path0, Cat.StorePath(0), 'StorePath(0) = Path0');
+    CheckEqualsStr(Path1, Cat.StorePath(1), 'StorePath(1) = Path1');
+
+    { ResolveAcrossStores('B') -> Found, StoreIndex=1, TargetId='B' }
+    Res := Cat.ResolveAcrossStores('B');
+    Check(Res.Found,              'ResolveAcrossStores(B).Found = True');
+    CheckEqualsInt(1, Res.StoreIndex, 'ResolveAcrossStores(B).StoreIndex = 1');
+    CheckEqualsStr('B', Res.TargetId, 'ResolveAcrossStores(B).TargetId = B');
+
+    { ResolveAcrossStores('A') -> Found, StoreIndex=0 }
+    Res := Cat.ResolveAcrossStores('A');
+    Check(Res.Found,              'ResolveAcrossStores(A).Found = True');
+    CheckEqualsInt(0, Res.StoreIndex, 'ResolveAcrossStores(A).StoreIndex = 0');
+    CheckEqualsStr('A', Res.TargetId, 'ResolveAcrossStores(A).TargetId = A');
+
+    { ResolveAcrossStores('Zed') -> not Found }
+    Res := Cat.ResolveAcrossStores('Zed');
+    Check(not Res.Found, 'ResolveAcrossStores(Zed).Found = False');
+
+    { SourceForStore(0).LoadTopology works }
+    Src0a := Cat.SourceForStore(0);
+    Check(Src0a <> nil, 'SourceForStore(0) <> nil');
+    D := TGraphData.Create;
+    try
+      Check(Src0a.LoadTopology(D), 'SourceForStore(0).LoadTopology = True');
+      Check(D.NodeCount > 0, 'LoadTopology NodeCount > 0');
+    finally
+      D.Free;
+    end;
+
+    { SourceForStore(0) returns the SAME cached instance }
+    Src0b := Cat.SourceForStore(0);
+    Check(Src0b <> nil, 'SourceForStore(0) second call <> nil');
+    { Same interface instance (pointer equality via Supports) }
+    Check(Src0a = Src0b,
+      'SourceForStore(0) cached -- same interface reference');
+
+    { Release catalog BEFORE deleting the temp files so the connection closes }
+    Cat  := nil;
+    Src0a := nil;
+    Src0b := nil;
+  finally
+    DeleteTempDb(Path0);
+    DeleteTempDb(Path1);
+  end;
+end;
+
+{ ---- Task 5 integration smoke (soft): ORM3 + library catalog ---- }
+
+procedure Test_DbCatalog_LibrarySmoke;
+const
+  ORM3_PATH = 'C:\Projects\DB\ORM3\drag-lint.sqlite';
+  LIB_PATH  =
+    'C:\Projects\Delphi-RAG-lint\third_party\dll-win32\drag-lint-library.sqlite';
+var
+  Cat:      IDbCatalog;
+  D:        TGraphData;
+  I:        Integer;
+  E:        TGraphEdge;
+  Res:      TCrossDbResolution;
+  FoundSection: Boolean;
+  T0:       TDateTime;
+  ElapsedMs: Double;
+  ResolveNames: array[0..3] of string;
+  NName:    string;
+begin
+  if not (TFile.Exists(ORM3_PATH) and TFile.Exists(LIB_PATH)) then
+  begin
+    WriteLn('    SKIP: one or both real DBs absent -- catalog smoke skipped');
+    Exit;
+  end;
+
+  { The library DB may be locked by the drag-lint indexer process.
+    Treat any "database is locked" / open failure as a SKIP (soft smoke). }
+  try
+    Cat := TDbCatalog.Create([ORM3_PATH, LIB_PATH]);
+  except
+    on Ex: Exception do
+    begin
+      WriteLn('    SKIP: could not open catalog (' + Ex.Message + ')');
+      Exit;
+    end;
+  end;
+
+  try
+    { ---- LoadTopology store 0 (ORM3) ---- }
+    D := TGraphData.Create;
+    try
+      Check(Cat.SourceForStore(0).LoadTopology(D),
+        'CatalogSmoke: ORM3 LoadTopology True');
+      Check(D.NodeCount > 100,
+        Format('CatalogSmoke: ORM3 NodeCount > 100 (got %d)', [D.NodeCount]));
+
+      FoundSection := False;
+      for I := 0 to D.EdgeCount - 1 do
+      begin
+        E := D.EdgeAt(I);
+        if (E.Kind = ekUses) and (E.Label_ <> '') then
+        begin
+          FoundSection := True;
+          Break;
+        end;
+      end;
+      Check(FoundSection,
+        'CatalogSmoke: at least one ekUses edge has a non-empty section label');
+
+      WriteLn(Format('    CatalogSmoke ORM3: NodeCount=%d EdgeCount=%d',
+        [D.NodeCount, D.EdgeCount]));
+    finally
+      D.Free;
+    end;
+
+    { ---- ResolveAcrossStores against library (no LoadTopology) ---- }
+    { Try well-known RTL names -- at least one should be in the library.
+      Opening the library DB may fail if it is locked; treat that as SKIP. }
+    ResolveNames[0] := 'TObject';
+    ResolveNames[1] := 'IInterface';
+    ResolveNames[2] := 'TList';
+    ResolveNames[3] := 'SysUtils';
+
+    for NName in ResolveNames do
+    begin
+      try
+        T0 := Now;
+        Res := Cat.ResolveAcrossStores(NName);
+        ElapsedMs := (Now - T0) * 86400.0 * 1000.0;
+        if Res.Found then
+        begin
+          Check(Res.StoreIndex in [0, 1],
+            'CatalogSmoke: StoreIndex in {0,1} for ' + NName);
+          WriteLn(Format('    CatalogSmoke: ResolveAcrossStores(%s) -> store %d,' +
+                         ' qname=%s (%.0f ms)',
+            [NName, Res.StoreIndex, Res.TargetId, ElapsedMs]));
+          if ElapsedMs > 10000 then
+            WriteLn('    WARNING: ResolveAcrossStores took > 10 s -- check index');
+        end
+        else
+          WriteLn(Format('    CatalogSmoke: ResolveAcrossStores(%s) -> not found' +
+                         ' (%.0f ms)', [NName, ElapsedMs]));
+      except
+        on Ex: Exception do
+        begin
+          WriteLn('    SKIP: ResolveAcrossStores(' + NName + ') failed -- ' +
+                  Ex.Message);
+          Cat := nil;
+          Exit;
+        end;
+      end;
+    end;
+
+    Cat := nil;
+  except
+    on Ex: Exception do
+    begin
+      Cat := nil;
+      raise;
+    end;
+  end;
+end;
+
 initialization
   RegisterTest('DbSource_LoadTopology',   Test_DbSource_LoadTopology);
   RegisterTest('DbSource_SchemaMismatch', Test_DbSource_SchemaMismatch);
@@ -420,4 +601,6 @@ initialization
   RegisterTest('DbSource_Docs',           Test_DbSource_Docs);
   RegisterTest('DbSource_ORM3LocateSmoke', Test_DbSource_ORM3LocateSmoke);
   RegisterTest('DbSource_ORM3Smoke',      Test_DbSource_ORM3Smoke);
+  RegisterTest('DbCatalog_CrossStoreResolve', Test_DbCatalog_CrossStoreResolve);
+  RegisterTest('DbCatalog_LibrarySmoke',  Test_DbCatalog_LibrarySmoke);
 end.

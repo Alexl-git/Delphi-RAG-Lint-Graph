@@ -8,6 +8,9 @@ unit Test.Db.Fixtures;
 interface
 
 function CreateTempV6Db: string;
+{ Creates a minimal temp DB with a single unit symbol named ARootUnit.
+  Used for TDbCatalog / cross-store resolution tests. }
+function CreateTempV6DbNamed(const ARootUnit: string): string;
 procedure DeleteTempDb(const APath: string);
 
 implementation
@@ -458,6 +461,76 @@ begin
 
       Conn.Commit;
 
+    except
+      Conn.Rollback;
+      raise;
+    end;
+
+  finally
+    if Conn.Connected then
+      Conn.Close;
+    Conn.Free;
+  end;
+end;
+
+{ CreateTempV6DbNamed: build a minimal v6 DB with one unit symbol named
+  ARootUnit.  The qualified_name equals ARootUnit.  The DB is created fresh
+  in %TEMP% and must be deleted by the caller. }
+function CreateTempV6DbNamed(const ARootUnit: string): string;
+var
+  Conn: TFDConnection;
+  Stmt: string;
+  FileId: Int64;
+  Q: TFDQuery;
+begin
+  Result := TPath.Combine(TPath.GetTempPath,
+    'draglint_test_' + TPath.GetGUIDFileName(False) + '.sqlite');
+
+  Conn := TFDConnection.Create(nil);
+  try
+    Conn.DriverName := 'SQLite';
+    Conn.Params.Values['Database'] := Result;
+    Conn.Params.Values['LockingMode'] := 'Normal';
+    Conn.LoginPrompt := False;
+    Conn.Connected := True;
+
+    Conn.StartTransaction;
+    try
+      for Stmt in SCHEMA_DDL do
+        Conn.ExecSQL(Stmt);
+      Conn.ExecSQL(
+        'INSERT OR REPLACE INTO schema_meta(key, value) VALUES (''schema_version'', ?)',
+        [IntToStr(SCHEMA_VERSION)]);
+      Conn.Commit;
+    except
+      Conn.Rollback;
+      raise;
+    end;
+
+    Conn.StartTransaction;
+    try
+      Conn.ExecSQL(
+        'INSERT INTO files(path, mtime_unix, sha256, parsed_at, language) ' +
+        'VALUES (''' + ARootUnit + '.pas'', 0, ''abc'', 0, ''delphi'')');
+      Q := TFDQuery.Create(nil);
+      try
+        Q.Connection := Conn;
+        Q.SQL.Text := 'SELECT last_insert_rowid()';
+        Q.Open;
+        FileId := Q.Fields[0].AsLargeInt;
+        Q.Close;
+      finally
+        Q.Free;
+      end;
+
+      Conn.ExecSQL(
+        'INSERT INTO symbols(file_id, parent_id, kind, name, qualified_name, ' +
+        '  signature, modifiers, start_line, start_col, end_line, end_col) ' +
+        'VALUES (' + IntToStr(FileId) + ', NULL, ''unit'', ''' +
+        ARootUnit + ''', ''' + ARootUnit + ''', ' +
+        '  NULL, NULL, 1, 1, 20, 1)');
+
+      Conn.Commit;
     except
       Conn.Rollback;
       raise;

@@ -19,6 +19,7 @@ type
     function ResolveCref(const AText: string): TCrefResolution;
     function LocateSymbol(const AQName: string; out AFile: string;
       out ALine: Integer): Boolean;
+    function ResolveName(const AName: string; out AQName: string): Boolean;
   end;
 
   { Loads a caller-supplied topology (built by Test.Graph.Builders) into the
@@ -36,6 +37,7 @@ type
     function ResolveCref(const AText: string): TCrefResolution;
     function LocateSymbol(const AQName: string; out AFile: string;
       out ALine: Integer): Boolean;
+    function ResolveName(const AName: string; out AQName: string): Boolean;
   end;
 
 implementation
@@ -110,6 +112,14 @@ begin
   Result := False;
 end;
 
+{ Topology-only fake: no name resolution. }
+function TFakeGraphSource.ResolveName(const AName: string;
+  out AQName: string): Boolean;
+begin
+  AQName := '';
+  Result := False;
+end;
+
 constructor TPreloadedSource.Create(ATemplate: TGraphData);
 begin
   inherited Create;
@@ -163,6 +173,14 @@ function TPreloadedSource.LocateSymbol(const AQName: string; out AFile: string;
 begin
   AFile := '';
   ALine := 0;
+  Result := False;
+end;
+
+{ Topology-only preloaded source: no name resolution. }
+function TPreloadedSource.ResolveName(const AName: string;
+  out AQName: string): Boolean;
+begin
+  AQName := '';
   Result := False;
 end;
 

@@ -47,6 +47,25 @@ type
     function ResolveCref(const AText: string): TCrefResolution;
     function LocateSymbol(const AQName: string; out AFile: string;
       out ALine: Integer): Boolean;
+    { Lightweight: exact qualified_name match, then bare name (kind-priority).
+      Returns first hit; does NOT call LoadTopology.  Used by TDbCatalog. }
+    function ResolveName(const AName: string; out AQName: string): Boolean;
+  end;
+
+  { TDbCatalog: ordered set of DB stores.  SourceForStore lazily creates and
+    caches a TDbGraphSource per index.  ResolveAcrossStores runs ResolveName
+    against each store in order (first-hit-wins) without LoadTopology. }
+  TDbCatalog = class(TInterfacedObject, IDbCatalog)
+  strict private
+    FPaths:   TArray<string>;
+    FSources: TArray<IGraphSource>;
+  public
+    constructor Create(const APaths: TArray<string>);
+    { IDbCatalog }
+    function StoreCount: Integer;
+    function StorePath(AIndex: Integer): string;
+    function SourceForStore(AIndex: Integer): IGraphSource;
+    function ResolveAcrossStores(const AName: string): TCrossDbResolution;
   end;
 
 implementation
@@ -769,6 +788,106 @@ begin
     end;
   finally
     Q.Free;
+  end;
+end;
+
+{ ---- Task 5: ResolveName (lightweight, no LoadTopology) ---- }
+
+function TDbGraphSource.ResolveName(const AName: string;
+  out AQName: string): Boolean;
+var
+  Q: TFDQuery;
+begin
+  AQName := '';
+  Result := False;
+
+  Q := TFDQuery.Create(nil);
+  try
+    Q.Connection := FConn;
+
+    { 1. Exact qualified_name match }
+    Q.SQL.Text :=
+      'SELECT qualified_name FROM symbols WHERE qualified_name = :q LIMIT 1';
+    Q.ParamByName('q').AsString := AName;
+    Q.Open;
+    if not Q.IsEmpty then
+    begin
+      AQName := Q.Fields[0].AsString;
+      Result := True;
+      Q.Close;
+      Exit;
+    end;
+    Q.Close;
+
+    { 2. Bare name match (kind-priority order, same as ResolveCref) }
+    Q.SQL.Text :=
+      'SELECT qualified_name FROM symbols WHERE name = :n' +
+      ' ORDER BY CASE kind' +
+      '   WHEN ''class'' THEN 0 WHEN ''method'' THEN 1' +
+      '   WHEN ''property'' THEN 2 ELSE 3 END,' +
+      '  qualified_name LIMIT 1';
+    Q.ParamByName('n').AsString := AName;
+    Q.Open;
+    if not Q.IsEmpty then
+    begin
+      AQName := Q.Fields[0].AsString;
+      Result := True;
+    end;
+    Q.Close;
+  finally
+    Q.Free;
+  end;
+end;
+
+{ ---- TDbCatalog ---- }
+
+constructor TDbCatalog.Create(const APaths: TArray<string>);
+var
+  I: Integer;
+begin
+  inherited Create;
+  FPaths := APaths;
+  SetLength(FSources, Length(APaths));
+  for I := 0 to High(FSources) do
+    FSources[I] := nil;
+end;
+
+function TDbCatalog.StoreCount: Integer;
+begin
+  Result := Length(FPaths);
+end;
+
+function TDbCatalog.StorePath(AIndex: Integer): string;
+begin
+  Result := FPaths[AIndex];
+end;
+
+function TDbCatalog.SourceForStore(AIndex: Integer): IGraphSource;
+begin
+  if FSources[AIndex] = nil then
+    FSources[AIndex] := TDbGraphSource.Create(FPaths[AIndex], AIndex);
+  Result := FSources[AIndex];
+end;
+
+function TDbCatalog.ResolveAcrossStores(
+  const AName: string): TCrossDbResolution;
+var
+  I:    Integer;
+  Src:  IGraphSource;
+  QN:   string;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  Result.Found := False;
+  for I := 0 to StoreCount - 1 do
+  begin
+    Src := SourceForStore(I);
+    if Src.ResolveName(AName, QN) then
+    begin
+      Result.Found      := True;
+      Result.StoreIndex := I;
+      Result.TargetId   := QN;
+      Exit;
+    end;
   end;
 end;
 

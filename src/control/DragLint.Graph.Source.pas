@@ -20,6 +20,11 @@ type
     function ResolveCref(const AText: string): TCrefResolution;
     function LocateSymbol(const AQName: string; out AFile: string;
       out ALine: Integer): Boolean;
+    { Lightweight name lookup: exact qualified_name then bare name (kind-priority
+      order).  Sets AQName to the found qualified_name and returns True on a
+      first-hit match; returns False (AQName := '') when nothing found.
+      Must NOT call LoadTopology -- runs a single indexed SELECT per store. }
+    function ResolveName(const AName: string; out AQName: string): Boolean;
   end;
 
   IDbCatalog = interface

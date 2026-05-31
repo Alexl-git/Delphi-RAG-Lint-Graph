@@ -24,6 +24,7 @@ type
     function ResolveCref(const AText: string): TCrefResolution;
     function LocateSymbol(const AQName: string; out AFile: string;
       out ALine: Integer): Boolean;
+    function ResolveName(const AName: string; out AQName: string): Boolean;
   end;
 
   TFakeDbCatalog = class(TInterfacedObject, IDbCatalog)
@@ -80,6 +81,22 @@ function TStoreSource.LocateSymbol(const AQName: string; out AFile: string;
   out ALine: Integer): Boolean;
 begin
   AFile := ''; ALine := 0; Result := False;
+end;
+
+{ Resolve against the single canned root id for this store. }
+function TStoreSource.ResolveName(const AName: string;
+  out AQName: string): Boolean;
+begin
+  if AName = FRootId then
+  begin
+    AQName := FRootId;
+    Result := True;
+  end
+  else
+  begin
+    AQName := '';
+    Result := False;
+  end;
 end;
 
 function TFakeDbCatalog.StoreCount: Integer;
