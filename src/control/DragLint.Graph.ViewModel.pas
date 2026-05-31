@@ -79,6 +79,16 @@ type
     function  LocateSymbol(const AId: string; out AFile: string;
       out ALine: Integer): Boolean;
     procedure SetOnStoreChanged(AValue: TGraphVMNotify);
+    { Top-level cap: limits the number of visible direct children of the
+      project root to the top-N by descendant count (largest first).
+      FShowAllTopLevel and FTopLevelLimit are view preferences; they are NOT
+      reset on Reload/source change so the user's preference survives store
+      switches.  FHiddenTopLevelCount is updated each time Projection runs. }
+    procedure SetShowAllTopLevel(AValue: Boolean);
+    function  ShowAllTopLevel: Boolean;
+    procedure SetTopLevelLimit(AValue: Integer);
+    function  TopLevelLimit: Integer;
+    function  HiddenTopLevelCount: Integer;
   end;
 
   TGraphViewModel = class(TInterfacedObject, IGraphViewModel)
@@ -97,6 +107,9 @@ type
     FNavStack:    TStack<TNavEntry>;
     FOnStoreChanged: TGraphVMNotify;
     FRestoring:   Boolean;
+    FShowAllTopLevel:    Boolean;
+    FTopLevelLimit:      Integer;
+    FHiddenTopLevelCount: Integer;
     procedure DoChanged;
     procedure DoSelectionChanged;
     procedure DoStoreChanged;
@@ -144,6 +157,11 @@ type
     function  LocateSymbol(const AId: string; out AFile: string;
       out ALine: Integer): Boolean;
     procedure SetOnStoreChanged(AValue: TGraphVMNotify);
+    procedure SetShowAllTopLevel(AValue: Boolean);
+    function  ShowAllTopLevel: Boolean;
+    procedure SetTopLevelLimit(AValue: Integer);
+    function  TopLevelLimit: Integer;
+    function  HiddenTopLevelCount: Integer;
   end;
 
 implementation
@@ -160,6 +178,9 @@ begin
   FIsolate := False;
   FNavStack := TStack<TNavEntry>.Create;
   FRestoring := False;
+  FShowAllTopLevel := False;
+  FTopLevelLimit := 10;
+  FHiddenTopLevelCount := 0;
 end;
 
 destructor TGraphViewModel.Destroy;
@@ -280,6 +301,16 @@ var
   Key: string;
   FocusRep: Integer;
   InHood: TDictionary<Integer, Boolean>;
+  { top-level cap }
+  ProjRootIdx: Integer;
+  TopLevel: TList<Integer>;
+  Removed: TDictionary<Integer, Boolean>;
+  Cur: Integer;
+  CapCount, NIdx: Integer;
+  CapIdxArr: TArray<Integer>;
+  CapDescArr: TArray<Integer>;
+  Tmp: Integer;
+  Swapped: Boolean;
 begin
   Nodes := TList<TProjNode>.Create;
   Edges := TList<TProjEdge>.Create;
@@ -333,6 +364,99 @@ begin
     finally
       EdgeKey.Free;
     end;
+    { --- top-level cap ---
+      Applied BEFORE focus dimming so the cap operates on the
+      collapse-resolved visible set.  Removing a top-level unit also removes
+      all its currently-visible descendants (they share the same ancestor
+      chain) and any edge touching a removed node.
+      View preferences FShowAllTopLevel/FTopLevelLimit survive Reload. }
+    ProjRootIdx := FData.FindNodeIndex('@project');
+    if ProjRootIdx >= 0 then
+    begin
+      { collect visible top-level units: direct children of @project }
+      TopLevel := TList<Integer>.Create;
+      try
+        for I := 0 to Nodes.Count - 1 do
+          if FData.ParentIndexOf(Nodes[I].NodeIdx) = ProjRootIdx then
+            TopLevel.Add(Nodes[I].NodeIdx);
+
+        if (not FShowAllTopLevel) and (TopLevel.Count > FTopLevelLimit) then
+        begin
+          { Sort TopLevel by DescendantCount DESC, tie-break by index ASC
+            using a simple bubble sort (counts small in unit tests; this is
+            fine for reasonable numbers of units in real use too). }
+          CapCount := TopLevel.Count;
+          SetLength(CapIdxArr, CapCount);
+          SetLength(CapDescArr, CapCount);
+          for I := 0 to CapCount - 1 do
+          begin
+            CapIdxArr[I] := TopLevel[I];
+            CapDescArr[I] := FData.DescendantCount(TopLevel[I]);
+          end;
+          repeat
+            Swapped := False;
+            for I := 0 to CapCount - 2 do
+            begin
+              { want DESC by desc-count; tie-break ASC by node index }
+              if (CapDescArr[I] < CapDescArr[I + 1])
+                or ((CapDescArr[I] = CapDescArr[I + 1])
+                    and (CapIdxArr[I] > CapIdxArr[I + 1])) then
+              begin
+                Tmp := CapDescArr[I]; CapDescArr[I] := CapDescArr[I+1]; CapDescArr[I+1] := Tmp;
+                Tmp := CapIdxArr[I];  CapIdxArr[I]  := CapIdxArr[I+1];  CapIdxArr[I+1]  := Tmp;
+                Swapped := True;
+              end;
+            end;
+          until not Swapped;
+
+          { Mark the tail (hidden) top-level units and all their visible
+            descendants for removal. }
+          Removed := TDictionary<Integer, Boolean>.Create;
+          try
+            for I := FTopLevelLimit to CapCount - 1 do
+              Removed.AddOrSetValue(CapIdxArr[I], True);
+
+            { Propagate: any node whose top-level ancestor is removed }
+            for I := 0 to Nodes.Count - 1 do
+            begin
+              NIdx := Nodes[I].NodeIdx;
+              if Removed.ContainsKey(NIdx) then Continue;
+              { walk up to the top-level ancestor }
+              Cur := NIdx;
+              while FData.ParentIndexOf(Cur) <> ProjRootIdx do
+              begin
+                Cur := FData.ParentIndexOf(Cur);
+                if Cur < 0 then Break;
+              end;
+              if (Cur >= 0) and Removed.ContainsKey(Cur) then
+                Removed.AddOrSetValue(NIdx, True);
+            end;
+
+            { Remove nodes }
+            for I := Nodes.Count - 1 downto 0 do
+              if Removed.ContainsKey(Nodes[I].NodeIdx) then
+                Nodes.Delete(I);
+
+            { Remove edges touching removed nodes }
+            for I := Edges.Count - 1 downto 0 do
+              if Removed.ContainsKey(Edges[I].SourceIdx)
+                 or Removed.ContainsKey(Edges[I].TargetIdx) then
+                Edges.Delete(I);
+
+            FHiddenTopLevelCount := CapCount - FTopLevelLimit;
+          finally
+            Removed.Free;
+          end;
+        end
+        else
+          FHiddenTopLevelCount := 0;
+      finally
+        TopLevel.Free;
+      end;
+    end
+    else
+      FHiddenTopLevelCount := 0;
+
     { focus: BFS over the visible projection graph from the focus node's
       representative, marking nodes within FFocusHops as in-neighborhood. }
     if FFocusId <> '' then
@@ -627,6 +751,40 @@ begin
     Result := FSource.LocateSymbol(AId, AFile, ALine)
   else
     Result := False;
+end;
+
+procedure TGraphViewModel.SetShowAllTopLevel(AValue: Boolean);
+begin
+  if FShowAllTopLevel <> AValue then
+  begin
+    FShowAllTopLevel := AValue;
+    DoChanged;
+  end;
+end;
+
+function TGraphViewModel.ShowAllTopLevel: Boolean;
+begin
+  Result := FShowAllTopLevel;
+end;
+
+procedure TGraphViewModel.SetTopLevelLimit(AValue: Integer);
+begin
+  if AValue < 1 then AValue := 1;
+  if FTopLevelLimit <> AValue then
+  begin
+    FTopLevelLimit := AValue;
+    DoChanged;
+  end;
+end;
+
+function TGraphViewModel.TopLevelLimit: Integer;
+begin
+  Result := FTopLevelLimit;
+end;
+
+function TGraphViewModel.HiddenTopLevelCount: Integer;
+begin
+  Result := FHiddenTopLevelCount;
 end;
 
 procedure TGraphViewModel.ComputeNeighborhood(AStart, AHops: Integer;

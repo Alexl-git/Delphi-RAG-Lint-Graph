@@ -11,6 +11,10 @@ function BuildNode(const AId: string; AKind: TGraphNodeKind;
   MA->MB and an interface uses edge uA->uB. Containment via ParentId.
   Caller owns the returned TGraphData and must call BuildHierarchy. }
 function BuildTwoUnitGraph: TGraphData;
+{ ACount units named unit_0..unit_(ACount-1) under a project root.
+  unit_i has i child methods (unit_i.m0 .. unit_i.m(i-1)), so DescendantCount
+  for unit_i = i.  No non-containment edges. }
+function BuildManyUnitsGraph(ACount: Integer): TGraphData;
 
 implementation
 
@@ -50,6 +54,25 @@ begin
   Result.AddEdge(E);
 
   Result.BuildHierarchy;  { adds synthetic @project root over uA, uB }
+end;
+
+function BuildManyUnitsGraph(ACount: Integer): TGraphData;
+var
+  I, J: Integer;
+  UnitId, MethodId: string;
+begin
+  Result := TGraphData.Create;
+  for I := 0 to ACount - 1 do
+  begin
+    UnitId := 'unit_' + IntToStr(I);
+    Result.AddNode(BuildNode(UnitId, nkUnit, ''));
+    for J := 0 to I - 1 do
+    begin
+      MethodId := UnitId + '.m' + IntToStr(J);
+      Result.AddNode(BuildNode(MethodId, nkMethod, UnitId));
+    end;
+  end;
+  Result.BuildHierarchy;
 end;
 
 end.

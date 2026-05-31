@@ -281,6 +281,80 @@ begin
   Check(Found, 'uA->uB uses edge found in projection');
 end;
 
+procedure Test_VMTopLevelCap;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  ProjRootIdx, I, J, TopCount: Integer;
+  Found0, Found1: Boolean;
+  AllBigPresent: Boolean;
+  NodeIdx: Integer;
+begin
+  { 12 units: unit_i has i methods, so DescendantCount = i.
+    Biggest = unit_11 (11 methods), smallest = unit_0 (0), unit_1 (1). }
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildManyUnitsGraph(12)));
+
+  { --- default: ShowAll=False, Limit=10 --- }
+  Proj := VM.Projection;
+  ProjRootIdx := VM.Data.FindNodeIndex('@project');
+  Check(ProjRootIdx >= 0, 'project root present');
+
+  { Count top-level nodes (direct children of @project in projection) }
+  TopCount := 0;
+  for I := 0 to High(Proj.Nodes) do
+    if VM.Data.ParentIndexOf(Proj.Nodes[I].NodeIdx) = ProjRootIdx then
+      Inc(TopCount);
+  CheckEqualsInt(10, TopCount, 'default cap: exactly 10 top-level units');
+  CheckEqualsInt(2, VM.HiddenTopLevelCount, 'default cap: 2 units hidden');
+
+  { The two SMALLEST units (unit_0, unit_1) must NOT be in the projection }
+  Found0 := False;
+  Found1 := False;
+  for I := 0 to High(Proj.Nodes) do
+  begin
+    NodeIdx := Proj.Nodes[I].NodeIdx;
+    if VM.Data.NodeAt(NodeIdx)^.Id = 'unit_0' then Found0 := True;
+    if VM.Data.NodeAt(NodeIdx)^.Id = 'unit_1' then Found1 := True;
+  end;
+  Check(not Found0, 'unit_0 (smallest) excluded from projection');
+  Check(not Found1, 'unit_1 (second smallest) excluded from projection');
+
+  { The 10 biggest units (unit_2..unit_11) must be present }
+  AllBigPresent := True;
+  for I := 2 to 11 do
+  begin
+    NodeIdx := VM.Data.FindNodeIndex('unit_' + IntToStr(I));
+    Found0 := False;
+    if NodeIdx >= 0 then
+      for J := 0 to High(Proj.Nodes) do
+        if Proj.Nodes[J].NodeIdx = NodeIdx then Found0 := True;
+    if not Found0 then AllBigPresent := False;
+  end;
+  Check(AllBigPresent, 'unit_2..unit_11 (top 10 biggest) all present');
+
+  { --- ShowAll=True: all 12 units present --- }
+  VM.SetShowAllTopLevel(True);
+  Proj := VM.Projection;
+  TopCount := 0;
+  for I := 0 to High(Proj.Nodes) do
+    if VM.Data.ParentIndexOf(Proj.Nodes[I].NodeIdx) = ProjRootIdx then
+      Inc(TopCount);
+  CheckEqualsInt(12, TopCount, 'ShowAll=True: all 12 units visible');
+  CheckEqualsInt(0, VM.HiddenTopLevelCount, 'ShowAll=True: HiddenTopLevelCount=0');
+
+  { --- SetTopLevelLimit(5), ShowAll=False: 5 top-level units, 7 hidden --- }
+  VM.SetShowAllTopLevel(False);
+  VM.SetTopLevelLimit(5);
+  Proj := VM.Projection;
+  TopCount := 0;
+  for I := 0 to High(Proj.Nodes) do
+    if VM.Data.ParentIndexOf(Proj.Nodes[I].NodeIdx) = ProjRootIdx then
+      Inc(TopCount);
+  CheckEqualsInt(5, TopCount, 'Limit=5: exactly 5 top-level units');
+  CheckEqualsInt(7, VM.HiddenTopLevelCount, 'Limit=5: 7 hidden');
+end;
+
 initialization
   RegisterTest('VMLoadsViaSource', Test_VMLoadsViaSource);
   RegisterTest('VMSelectionFiresEvent', Test_VMSelectionFiresEvent);
@@ -295,4 +369,5 @@ initialization
   RegisterTest('VMNavBackStack', Test_VMNavBackStack);
   RegisterTest('VMCrossDbJump', Test_VMCrossDbJump);
   RegisterTest('VMProjEdgeSection', Test_VMProjEdgeSection);
+  RegisterTest('VMTopLevelCap', Test_VMTopLevelCap);
 end.
