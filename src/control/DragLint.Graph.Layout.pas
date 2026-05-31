@@ -31,7 +31,6 @@ type
     FCooling:     Double;   { temperature *= cooling per iter }
     FWidth:       Double;   { logical viewport extents (used to seed positions) }
     FHeight:      Double;
-    procedure Reset(AData: TGraphData);
   public
     constructor Create;
     { Initialize random positions and zero velocities, set ideal length. }
@@ -55,19 +54,6 @@ begin
   FK := 50.0;
   FTemperature := 100.0;
   FCooling := 0.95;
-end;
-
-procedure TGraphLayout.Reset(AData: TGraphData);
-var
-  I: Integer;
-  N: PGraphNode;
-begin
-  for I := 0 to AData.NodeCount - 1 do
-  begin
-    N := AData.NodeAt(I);
-    N.VX := 0;
-    N.VY := 0;
-  end;
 end;
 
 procedure TGraphLayout.Init(AData: TGraphData; AWidth, AHeight: Double);
