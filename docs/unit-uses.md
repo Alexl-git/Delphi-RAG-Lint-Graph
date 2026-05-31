@@ -168,6 +168,71 @@ graphing tool should query SQL directly for unit-graph rendering.
 (If LSP integration becomes needed later, a custom `drag-lint/uses`
 extension method would be a small add.)
 
+### D. Bulk CSV via `drag-lint uses-report`
+
+For analysis in Excel / pandas / other-tool, drag-lint v0.40.4 ships
+a CSV exporter:
+
+```
+drag-lint uses-report --output <out.csv> [--db ...]
+                      [--depth N]
+                      [--include-external]
+                      [--all-sources]
+                      [--name <substr>]
+```
+
+Columns:
+
+| Column          | Type   | Meaning                                                         |
+|-----------------|--------|-----------------------------------------------------------------|
+| `source_unit`   | text   | basename stem (no ext) of the source file                        |
+| `used_unit`     | text   | verbatim unit_name from the uses clause                          |
+| `depth`         | int    | 1 = direct use, 2 = via one hop, ...                             |
+| `first_section` | text   | section the edge was first reached through                       |
+| `via_chain`     | text   | '>' separated unit chain from source to used (excl. self)         |
+| `external`      | 0/1    | 1 when the unit's target_file_id couldn't be resolved             |
+
+Walk semantics:
+- BFS from each source. Per-source visited set on `unit_name_norm`,
+  so each downstream unit appears at most once per source.
+- Cycles terminate naturally (visited check).
+- External units terminate the walk at their depth — we have no uses
+  data for them. With `--include-external` they're emitted as
+  rows; without it they're skipped silently (still consume visited
+  budget so they don't get repeated through other chains).
+- Cross-DB resolution: when `target_file_id` is NULL in one store
+  but the unit name matches a file basename in another `--db`, the
+  walk crosses over. Pass library DB alongside project DB to get
+  full transitive closure into RTL/VCL/3rd-party.
+
+Real-world example (Micronite ORM3, 799 indexed files, v0.40.4
+schema):
+
+```
+default mode (project sources only, externals skipped):
+  711 source units, 6,502 rows, 320 KB, 5.7s
+
+--include-external:
+  711 source units, 30,824 rows, 1.6 MB, 1.6s
+
+--name 'blueprint4' --include-external:
+  15 sources (Blueprint4 + Blueprint4.ViewModel + " - Copy" variants),
+  1,115 rows, max depth 3
+```
+
+For the graphing tool's offline-analysis mode, just shell out:
+
+```pascal
+RunShell('drag-lint uses-report --output ' + TempCsv +
+         ' --db ' + ProjectDb + ' --db ' + LibraryDb +
+         ' --include-external');
+LoadCsv(TempCsv);
+```
+
+then pivot client-side. For interactive node-click expansion, hit
+SQL directly per §4A — the CSV is for batch / Excel / pandas
+workflows.
+
 ---
 
 ## 5. Utilities this powers — query recipes
