@@ -848,18 +848,19 @@ begin
     Canvas.Pen.Width := 1;
   end;
   Canvas.Pen.Style := psSolid;
-  Canvas.Rectangle(BoxL, BoxT, BoxL + W, BoxT + H);
+  Canvas.RoundRect(BoxL, BoxT, BoxL + W, BoxT + H, 8, 8);
 
-  { title bar (kind-colored) }
+  { title text + a kind-colored separator line under it (cleaner than a filled
+    bar over the rounded corners) }
   NS := NodeStyleFor(ANode.Kind);
-  Canvas.Brush.Color := TColor(NS.Fill);
-  Canvas.Pen.Color := TColor($00606060);
-  Canvas.Pen.Width := 1;
-  Canvas.Rectangle(BoxL, BoxT, BoxL + W, BoxT + TitleH);
   Canvas.Brush.Style := bsClear;
   Canvas.Font.Style := [fsBold];
   Canvas.Font.Color := CL_LABEL;
   Canvas.TextOut(BoxL + PAD, BoxT + 1, Title);
+  Canvas.Pen.Color := TColor(NS.Fill);
+  Canvas.Pen.Width := 2;
+  Canvas.MoveTo(BoxL + 3, BoxT + TitleH);
+  Canvas.LineTo(BoxL + W - 3, BoxT + TitleH);
 
   { member rows }
   Canvas.Font.Style := [];
@@ -969,81 +970,96 @@ begin
     else
       Canvas.Pen.Style := psSolid;
 
-    { Draw shape }
-    case NS.Shape of
-      nsEllipse:
-        Canvas.Ellipse(P.X - R, P.Y - R, P.X + R, P.Y + R);
-      nsBox:
-        Canvas.Rectangle(P.X - NODE_W div 2, P.Y - NODE_H div 2,
-                          P.X + NODE_W div 2, P.Y + NODE_H div 2);
-      nsRoundBox:
-        Canvas.RoundRect(P.X - NODE_W div 2, P.Y - NODE_H div 2,
-                          P.X + NODE_W div 2, P.Y + NODE_H div 2,
-                          6, 6);
-    else
-      { nsDiamond, nsHexagon, nsCylinder, nsTag, nsTriangle: box fallback }
-      Canvas.Rectangle(P.X - NODE_W div 2, P.Y - NODE_H div 2,
-                        P.X + NODE_W div 2, P.Y + NODE_H div 2);
-    end;
-
-    Canvas.Pen.Style  := psSolid;
-    Canvas.Pen.Width  := 1;
-
-    { Collapsed badge "+N" }
+    { Compose the label up front: glyph prefix for members, collapsed count. }
+    S := N.Label_;
+    if S = '' then S := N.Id;
+    Glyph := VisibilityGlyph(N.Modifiers);
+    if Glyph <> '' then
+      S := Glyph + ' ' + S;
     if PN.Collapsed then
     begin
       DescN := FVM.Data.DescendantCount(PN.NodeIdx);
-      Badge := '+' + IntToStr(DescN);
-      Canvas.Brush.Color := TColor($00FF8000);
-      Canvas.Brush.Style := bsSolid;
-      Canvas.Pen.Color   := TColor($00202020);
-      Canvas.Pen.Width   := 1;
-      Canvas.RoundRect(P.X + R - 2, P.Y - R - 2,
-                        P.X + R + Canvas.TextWidth(Badge) + 4,
-                        P.Y - R + TextH + 2, 3, 3);
-      Canvas.Brush.Style := bsClear;
-      Canvas.Font.Color  := TColor($00FFFFFF);
-      Canvas.Font.Size   := 7;
-      Canvas.TextOut(P.X + R + 1, P.Y - R, Badge);
+      S := S + ' (+' + IntToStr(DescN) + ')';
     end;
 
-    { Label: always drawn for the selected node; zoom-gated for others. }
-    if (FZoom >= 0.6) or (N.Id = SelId) then
+    if NS.Shape in [nsBox, nsRoundBox] then
     begin
-      S := N.Label_;
-      if S = '' then S := N.Id;
-      { UML visibility glyph prefix for members (+ public / - private /
-        # protected / ~ published); empty for units/containers/free procs. }
-      Glyph := VisibilityGlyph(N.Modifiers);
-      if Glyph <> '' then
-        S := Glyph + ' ' + S;
+      { Rectangle node (unit / project / SQL table / DFM form): a slightly
+        rounded frame sized to fit the label, with the label drawn INSIDE.
+        Text colour follows the fill luminance so it stays readable. }
+      Canvas.Font.Size := 8;
+      var BW: Integer := Canvas.TextWidth(S) + 14;
+      var BH: Integer := Canvas.TextHeight('Ay') + 8;
+      var BL: Integer := P.X - BW div 2;
+      var BT: Integer := P.Y - BH div 2;
+      Canvas.RoundRect(BL, BT, BL + BW, BT + BH, 8, 8);
+      var Lum: Integer := (GetRValue(FillCol) * 299 + GetGValue(FillCol) * 587 +
+                           GetBValue(FillCol) * 114) div 1000;
+      Canvas.Brush.Style := bsClear;
+      if Lum > 140 then
+        Canvas.Font.Color := clBlack
+      else
+        Canvas.Font.Color := CL_LABEL;
+      Canvas.TextOut(P.X - Canvas.TextWidth(S) div 2,
+                     P.Y - Canvas.TextHeight(S) div 2, S);
+      Canvas.Pen.Style := psSolid;
+      Canvas.Pen.Width := 1;
+    end
+    else
+    begin
+      { Ellipse (free proc/func/other) + diamond/hexagon/etc. fallbacks. }
+      if NS.Shape = nsEllipse then
+        Canvas.Ellipse(P.X - R, P.Y - R, P.X + R, P.Y + R)
+      else
+        Canvas.RoundRect(P.X - NODE_W div 2, P.Y - NODE_H div 2,
+                         P.X + NODE_W div 2, P.Y + NODE_H div 2, 5, 5);
+
+      Canvas.Pen.Style := psSolid;
+      Canvas.Pen.Width := 1;
+
+      { Collapsed badge "+N" }
       if PN.Collapsed then
       begin
         DescN := FVM.Data.DescendantCount(PN.NodeIdx);
-        S := S + ' (+' + IntToStr(DescN) + ')';
-      end;
-      if (N.Id = SelId) and (FZoom < 0.6) then
-      begin
-        { Selected node at low zoom: draw a readable background behind label }
-        Canvas.Font.Size  := 8;
-        Canvas.Font.Color := CL_LABEL;
-        Canvas.Brush.Color := TColor($00303060);
+        Badge := '+' + IntToStr(DescN);
+        Canvas.Brush.Color := TColor($00FF8000);
         Canvas.Brush.Style := bsSolid;
-        Canvas.Pen.Color   := CL_SEL_BORDER;
+        Canvas.Pen.Color   := TColor($00202020);
         Canvas.Pen.Width   := 1;
-        Canvas.Pen.Style   := psSolid;
-        Canvas.Rectangle(
-          P.X - Canvas.TextWidth(S) div 2 - 2, P.Y + R + 1,
-          P.X + Canvas.TextWidth(S) div 2 + 2, P.Y + R + Canvas.TextHeight(S) + 3);
+        Canvas.RoundRect(P.X + R - 2, P.Y - R - 2,
+                          P.X + R + Canvas.TextWidth(Badge) + 4,
+                          P.Y - R + TextH + 2, 3, 3);
         Canvas.Brush.Style := bsClear;
-        Canvas.TextOut(P.X - Canvas.TextWidth(S) div 2, P.Y + R + 2, S);
-      end
-      else
+        Canvas.Font.Color  := TColor($00FFFFFF);
+        Canvas.Font.Size   := 7;
+        Canvas.TextOut(P.X + R + 1, P.Y - R, Badge);
+      end;
+
+      { Label below the shape (zoom-gated, or always for the selection). }
+      if (FZoom >= 0.6) or (N.Id = SelId) then
       begin
-        Canvas.Brush.Style := bsClear;
-        Canvas.Font.Color  := CL_LABEL;
-        Canvas.Font.Size   := 8;
-        Canvas.TextOut(P.X - Canvas.TextWidth(S) div 2, P.Y + R + 2, S);
+        Canvas.Font.Size := 8;
+        if (N.Id = SelId) and (FZoom < 0.6) then
+        begin
+          Canvas.Font.Color  := CL_LABEL;
+          Canvas.Brush.Color := TColor($00303060);
+          Canvas.Brush.Style := bsSolid;
+          Canvas.Pen.Color   := CL_SEL_BORDER;
+          Canvas.Pen.Width   := 1;
+          Canvas.Pen.Style   := psSolid;
+          Canvas.Rectangle(
+            P.X - Canvas.TextWidth(S) div 2 - 2, P.Y + R + 1,
+            P.X + Canvas.TextWidth(S) div 2 + 2,
+            P.Y + R + Canvas.TextHeight(S) + 3);
+          Canvas.Brush.Style := bsClear;
+          Canvas.TextOut(P.X - Canvas.TextWidth(S) div 2, P.Y + R + 2, S);
+        end
+        else
+        begin
+          Canvas.Brush.Style := bsClear;
+          Canvas.Font.Color  := CL_LABEL;
+          Canvas.TextOut(P.X - Canvas.TextWidth(S) div 2, P.Y + R + 2, S);
+        end;
       end;
     end;
   end;
