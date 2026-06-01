@@ -58,6 +58,7 @@ type
     function  SelectedId: string;
     function  SelectedNodeIndex: Integer;
     function  SelectedDoc: TGraphDoc;
+    function  DocFor(const AId: string): TGraphDoc;
     procedure SetOnChanged(AValue: TGraphVMNotify);
     procedure SetOnSelectionChanged(AValue: TGraphVMNotify);
     procedure Collapse(const AId: string);
@@ -144,6 +145,7 @@ type
     function  SelectedId: string;
     function  SelectedNodeIndex: Integer;
     function  SelectedDoc: TGraphDoc;
+    function  DocFor(const AId: string): TGraphDoc;
     procedure SetOnChanged(AValue: TGraphVMNotify);
     procedure SetOnSelectionChanged(AValue: TGraphVMNotify);
     procedure Collapse(const AId: string);
@@ -537,6 +539,13 @@ begin
   FillChar(Result, SizeOf(Result), 0);
   if (FSource <> nil) and (FSelectedId <> '') then
     Result := FSource.GetDoc(FSelectedId);
+end;
+
+function TGraphViewModel.DocFor(const AId: string): TGraphDoc;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  if (FSource <> nil) and (AId <> '') then
+    Result := FSource.GetDoc(AId);
 end;
 
 procedure TGraphViewModel.SetOnChanged(AValue: TGraphVMNotify);

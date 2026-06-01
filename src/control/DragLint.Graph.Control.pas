@@ -112,6 +112,13 @@ type
     FDownPt:      TPoint;
     FDownShift:   TShiftState;
 
+    { Roam + dwell hover: when the button is up, moving freely sets a hand
+      cursor over nodes; pausing pops a hint (kind/name/type/doc).  No repaint
+      on move (that was bug F1) -- the hint is a separate window. }
+    FHoverTimer: TTimer;
+    FHoverPt:    TPoint;
+    FHintWin:    THintWindow;
+
     { Projection cache -- rebuilt only when VM state changes }
     FProjection: TGraphProjection;
     FProjValid:  Boolean;
@@ -184,6 +191,11 @@ type
     { Perform the left-click action at (SX,SY) -- box row/title or circle node.
       Called from MouseUp when the press did not turn into a drag. }
     procedure DoLeftClickAt(SX, SY: Integer; AShift: TShiftState);
+    { Dwell-hover hint. }
+    procedure HoverTick(Sender: TObject);
+    procedure ShowHoverHint(const APt: TPoint; const AText: string);
+    procedure HideHoverHint;
+    procedure CMMouseLeave(var Msg: TMessage); message CM_MOUSELEAVE;
     { Right-click context menu. }
     procedure ShowContextMenu(SX, SY: Integer);
     procedure CtxOpenSource(Sender: TObject);
@@ -317,6 +329,12 @@ begin
   FAnimTimer.Interval := 33;   { ~30 fps }
   FAnimTimer.OnTimer  := AnimTick;
 
+  FHoverTimer := TTimer.Create(Self);
+  FHoverTimer.Enabled  := False;
+  FHoverTimer.Interval := 550;   { dwell before the hint pops }
+  FHoverTimer.OnTimer  := HoverTick;
+  FHintWin := nil;
+
   FDragNodeIdx := -1;
 
   { Right-click context menu (built in code so the control is self-contained). }
@@ -349,6 +367,8 @@ begin
   FAnimTimer.Free;
   FLayout.Free;
   FPlaced.Free;
+  FHoverTimer.Free;
+  FHintWin.Free;
   inherited;
 end;
 
@@ -1029,6 +1049,8 @@ begin
     G := VisibilityGlyph(M.Modifiers);
     if G = '' then G := ' ';
     Rows[I] := G + ' ' + M.Label_;
+    if M.Signature <> '' then            { field/return/param type, once indexed }
+      Rows[I] := Rows[I] + ': ' + M.Signature;
     if Canvas.TextWidth(Rows[I]) > W then W := Canvas.TextWidth(Rows[I]);
   end;
   if (Extra > 0) and
@@ -1385,6 +1407,7 @@ var
   NB:   PGraphNode;
 begin
   inherited;
+  HideHoverHint;
   if Button = mbRight then
   begin
     SetFocus;
@@ -1506,14 +1529,17 @@ var
   W: TPointF;
 begin
   inherited;
-  { Node drag in progress (left button held on a node). }
+  HideHoverHint;   { any movement dismisses the dwell hint }
+
+  { Node drag in progress -- ONLY while the left button is held (FDragNodeIdx is
+    set in MouseDown and cleared in MouseUp). }
   if FDragNodeIdx >= 0 then
   begin
     if (not FNodeMoved) and
        (Abs(X - FDownPt.X) + Abs(Y - FDownPt.Y) > 4) then
     begin
       FNodeMoved := True;
-      Cursor := crSizeAll;
+      Cursor := crSizeAll;          { move cursor only while actually dragging }
     end;
     if FNodeMoved then
     begin
@@ -1532,7 +1558,19 @@ begin
     FOffsetX := FDragStartOX - (X - FDragStartPt.X) / FZoom;
     FOffsetY := FDragStartOY - (Y - FDragStartPt.Y) / FZoom;
     Invalidate;
+    Exit;
   end;
+
+  { Button up: a free-roaming pointer.  Hand cursor over a node, arrow over
+    empty canvas; arm the dwell timer to pop a hint if the mouse settles.
+    No Invalidate here (that was the bug-F1 repaint storm) -- pure hit-test. }
+  if NodeIdxAt(X, Y) >= 0 then
+    Cursor := crHandPoint
+  else
+    Cursor := crDefault;
+  FHoverPt := Point(X, Y);
+  FHoverTimer.Enabled := False;
+  FHoverTimer.Enabled := True;
 end;
 
 procedure TDragLintGraphControl.MouseUp(Button: TMouseButton;
@@ -1541,18 +1579,92 @@ begin
   inherited;
   if Button <> mbLeft then Exit;
 
+  { Always leave "move mode": the move cursor only lives between MouseDown and
+    MouseUp on a node. }
+  Cursor := crDefault;
+
   if FDragNodeIdx >= 0 then
   begin
     if not FNodeMoved then
-      DoLeftClickAt(X, Y, FDownShift)   { it was a click, not a drag }
-    else
-      Cursor := crDefault;              { finished dragging the node }
+      DoLeftClickAt(X, Y, FDownShift);  { a click, not a drag }
     FDragNodeIdx := -1;
     FNodeMoved   := False;
     Exit;
   end;
 
   FDragging := False;
+end;
+
+procedure TDragLintGraphControl.HoverTick(Sender: TObject);
+var
+  Idx:  Integer;
+  N:    PGraphNode;
+  Doc:  TGraphDoc;
+  Kind, Txt: string;
+begin
+  FHoverTimer.Enabled := False;
+  if FVM = nil then Exit;
+  Idx := NodeIdxAt(FHoverPt.X, FHoverPt.Y);
+  if Idx < 0 then Exit;
+  N := FVM.Data.NodeAt(Idx);
+
+  case N.Kind of
+    nkUnit:      Kind := 'Unit';
+    nkClass:     Kind := 'Class';
+    nkInterface: Kind := 'Interface';
+    nkRecord:    Kind := 'Record';
+    nkType:      Kind := 'Type';
+    nkMethod:    Kind := 'Method';
+    nkProcedure: Kind := 'Procedure';
+    nkFunction:  Kind := 'Function';
+    nkProperty:  Kind := 'Property';
+    nkField:     Kind := 'Field';
+    nkConst:     Kind := 'Const';
+    nkVar:       Kind := 'Var';
+    nkProject:   Kind := 'Project';
+    nkDfmForm:   Kind := 'Form';
+  else
+    Kind := 'Symbol';
+  end;
+
+  Txt := Kind + ': ' + N.Id;
+  if N.Signature <> '' then
+    Txt := Txt + #13#10 + N.Signature;
+  Doc := FVM.DocFor(N.Id);
+  if Doc.HasDoc and (Doc.Summary <> '') then
+    Txt := Txt + #13#10#13#10 + Doc.Summary;
+
+  ShowHoverHint(FHoverPt, Txt);
+end;
+
+procedure TDragLintGraphControl.ShowHoverHint(const APt: TPoint;
+  const AText: string);
+var
+  R:  TRect;
+  SP: TPoint;
+begin
+  if AText = '' then Exit;
+  if FHintWin = nil then
+    FHintWin := THintWindow.Create(Self);
+  R := FHintWin.CalcHintRect(420, AText, nil);
+  SP := ClientToScreen(Point(APt.X + 14, APt.Y + 18));
+  OffsetRect(R, SP.X, SP.Y);
+  FHintWin.ActivateHint(R, AText);
+end;
+
+procedure TDragLintGraphControl.HideHoverHint;
+begin
+  FHoverTimer.Enabled := False;
+  if (FHintWin <> nil) and FHintWin.HandleAllocated and
+     IsWindowVisible(FHintWin.Handle) then
+    ShowWindow(FHintWin.Handle, SW_HIDE);
+end;
+
+procedure TDragLintGraphControl.CMMouseLeave(var Msg: TMessage);
+begin
+  inherited;
+  HideHoverHint;
+  Cursor := crDefault;
 end;
 
 procedure TDragLintGraphControl.DblClick;
