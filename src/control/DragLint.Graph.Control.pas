@@ -147,6 +147,12 @@ type
 
     procedure DrawEdges(const AProj: TGraphProjection);
     procedure DrawNodes(const AProj: TGraphProjection);
+    { UML class-box for a class/interface/record node: a titled frame with its
+      members listed inside (visibility glyph + name), drawn at ACenter.
+      Members come straight from TGraphData.ChildrenOf, so they need not be
+      separate projection nodes.  ASelected highlights the frame border. }
+    procedure DrawUmlTypeBox(ANode: PGraphNode; ANodeIdx: Integer;
+      const ACenter: TPoint; ASelected: Boolean);
     procedure DrawLegend(const AProj: TGraphProjection);
     procedure DrawArrowHead(PA, PB: TPoint);
 
@@ -713,6 +719,105 @@ begin
   Canvas.Pen.Color := OldColor;
 end;
 
+procedure TDragLintGraphControl.DrawUmlTypeBox(ANode: PGraphNode;
+  ANodeIdx: Integer; const ACenter: TPoint; ASelected: Boolean);
+const
+  PAD = 4;
+  MAX_ROWS = 12;
+var
+  Children: TArray<Integer>;
+  Rows: TArray<string>;
+  Title, G: string;
+  I, W, H, RowH, TitleH, BoxL, BoxT, Y, Shown, Extra: Integer;
+  M: PGraphNode;
+  NS: TNodeStyle;
+begin
+  Children := FVM.Data.ChildrenOf(ANodeIdx);
+  Title := ANode.Label_;
+  if Title = '' then Title := ANode.Id;
+  if ANode.Kind = nkInterface then
+    Title := '<<interface>> ' + Title
+  else if ANode.Kind = nkRecord then
+    Title := '<<record>> ' + Title;
+
+  Canvas.Font.Size := 8;
+  Canvas.Font.Style := [fsBold];
+  RowH := Canvas.TextHeight('Ay') + 2;
+  TitleH := RowH + 2;
+  W := Canvas.TextWidth(Title);
+
+  { build member rows (glyph + name), capped }
+  Shown := Length(Children);
+  Extra := 0;
+  if Shown > MAX_ROWS then
+  begin
+    Extra := Shown - MAX_ROWS;
+    Shown := MAX_ROWS;
+  end;
+  SetLength(Rows, Shown);
+  Canvas.Font.Style := [];
+  for I := 0 to Shown - 1 do
+  begin
+    M := FVM.Data.NodeAt(Children[I]);
+    G := VisibilityGlyph(M.Modifiers);
+    if G = '' then G := ' ';
+    Rows[I] := G + ' ' + M.Label_;
+    if Canvas.TextWidth(Rows[I]) > W then W := Canvas.TextWidth(Rows[I]);
+  end;
+  if (Extra > 0) and
+     (Canvas.TextWidth('... +' + IntToStr(Extra) + ' more') > W) then
+    W := Canvas.TextWidth('... +' + IntToStr(Extra) + ' more');
+
+  W := W + 2 * PAD;
+  H := TitleH + Shown * RowH + PAD;
+  if Extra > 0 then Inc(H, RowH);
+
+  BoxL := ACenter.X - W div 2;
+  BoxT := ACenter.Y - H div 2;
+
+  { body }
+  Canvas.Brush.Color := TColor($00202828);
+  Canvas.Brush.Style := bsSolid;
+  if ASelected then
+  begin
+    Canvas.Pen.Color := CL_SEL_BORDER;
+    Canvas.Pen.Width := 2;
+  end
+  else
+  begin
+    Canvas.Pen.Color := TColor($00606060);
+    Canvas.Pen.Width := 1;
+  end;
+  Canvas.Pen.Style := psSolid;
+  Canvas.Rectangle(BoxL, BoxT, BoxL + W, BoxT + H);
+
+  { title bar (kind-colored) }
+  NS := NodeStyleFor(ANode.Kind);
+  Canvas.Brush.Color := TColor(NS.Fill);
+  Canvas.Pen.Color := TColor($00606060);
+  Canvas.Pen.Width := 1;
+  Canvas.Rectangle(BoxL, BoxT, BoxL + W, BoxT + TitleH);
+  Canvas.Brush.Style := bsClear;
+  Canvas.Font.Style := [fsBold];
+  Canvas.Font.Color := CL_LABEL;
+  Canvas.TextOut(BoxL + PAD, BoxT + 1, Title);
+
+  { member rows }
+  Canvas.Font.Style := [];
+  Canvas.Font.Color := CL_LABEL;
+  Y := BoxT + TitleH + 1;
+  for I := 0 to Shown - 1 do
+  begin
+    Canvas.TextOut(BoxL + PAD, Y, Rows[I]);
+    Inc(Y, RowH);
+  end;
+  if Extra > 0 then
+  begin
+    Canvas.Font.Color := TColor($00A0A0A0);
+    Canvas.TextOut(BoxL + PAD, Y, '... +' + IntToStr(Extra) + ' more');
+  end;
+end;
+
 procedure TDragLintGraphControl.DrawNodes(const AProj: TGraphProjection);
 const
   NODE_W = 28;   { pixel width for box shapes }
@@ -748,6 +853,18 @@ begin
 
     NS := NodeStyleFor(N.Kind);
     FillCol := TColor(NS.Fill);
+
+    { UML class-box: classes/interfaces/records list their members inside a
+      titled frame (Phase 5).  Drawn when zoomed in enough to read, or when
+      selected; at low zoom they fall through to the compact rounded-rect so
+      the overview stays fast and uncluttered.  Members are read from
+      TGraphData, so they are never also drawn as separate nodes. }
+    if (N.Kind in [nkClass, nkInterface, nkRecord]) and
+       ((FZoom >= 0.6) or (N.Id = SelId)) then
+    begin
+      DrawUmlTypeBox(N, PN.NodeIdx, P, N.Id = SelId);
+      Continue;
+    end;
 
     { Dimmed: blend fill toward background }
     if PN.Dimmed then
@@ -1017,6 +1134,13 @@ begin
     begin
       FVM.SetFocus(N.Id, 1);
       FFocusActive := True;
+    end
+    else if (N.Kind in [nkClass, nkInterface, nkRecord]) then
+    begin
+      { Types render their members inside a UML box, so a click does not expand
+        to separate member nodes -- it opens the type's source instead. }
+      if Assigned(FOnOpenSource) then
+        FOnOpenSource(Self, N);
     end
     else if FExpandOnSingleClick and HasChildren then
       FVM.ToggleCollapse(N.Id)
