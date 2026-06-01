@@ -724,6 +724,7 @@ var
   P:        TPoint;
   R:        Integer;
   S:        string;
+  Glyph:    string;
   NS:       TNodeStyle;
   FillCol:  TColor;
   BgR, BgG, BgB: Integer;
@@ -823,6 +824,11 @@ begin
     begin
       S := N.Label_;
       if S = '' then S := N.Id;
+      { UML visibility glyph prefix for members (+ public / - private /
+        # protected / ~ published); empty for units/containers/free procs. }
+      Glyph := VisibilityGlyph(N.Modifiers);
+      if Glyph <> '' then
+        S := Glyph + ' ' + S;
       if PN.Collapsed then
       begin
         DescN := FVM.Data.DescendantCount(PN.NodeIdx);

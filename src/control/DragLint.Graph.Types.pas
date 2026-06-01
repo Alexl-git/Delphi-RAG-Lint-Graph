@@ -62,6 +62,7 @@ type
 
     DbId:     Int64;        { originating symbols.id (0 if synthetic) }
     Signature: string;      { symbols.signature (e.g. SQL column type) }
+    Modifiers: string;      { symbols.modifiers -- member visibility for UML glyphs }
     ParentId: string;       { id of containment parent; '' if none/root }
     ParentIdx: Integer;     { resolved by BuildHierarchy; -1 = root }
     Documented:    Boolean; { has a symbol_docs row }

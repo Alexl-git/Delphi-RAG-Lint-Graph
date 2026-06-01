@@ -384,7 +384,7 @@ begin
               become nodes.  No ORDER BY -- raw storage order is fastest. }
             Q.SQL.Text   :=
               'SELECT id, file_id, parent_id, kind, name, qualified_name, ' +
-              '  signature, start_line, start_col, end_line ' +
+              '  signature, modifiers, start_line, start_col, end_line ' +
               'FROM symbols LIMIT :max';
             Q.ParamByName('max').AsInteger := FMaxNodes;
             Q.Open;
@@ -400,6 +400,7 @@ begin
                                   Q.FieldByName('kind').AsString);
               Node.DbId      := SymId;
               Node.Signature := Q.FieldByName('signature').AsString;
+              Node.Modifiers := Q.FieldByName('modifiers').AsString;
               Node.Line      := Q.FieldByName('start_line').AsInteger;
               Node.Col       := Q.FieldByName('start_col').AsInteger;
               Node.Radius    := 12;

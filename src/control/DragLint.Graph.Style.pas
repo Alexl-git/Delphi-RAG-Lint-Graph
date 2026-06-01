@@ -42,6 +42,10 @@ const
 function NodeStyleFor(AKind: TGraphNodeKind): TNodeStyle;
 function EdgeStyleFor(AKind: TGraphEdgeKind; const ASection: string;
   AAggregated, ACrossDb: Boolean): TEdgeStyle;
+{ UML visibility glyph for a member's modifiers string:
+    +  public      -  private      #  protected      ~  published
+  Returns '' when no visibility is known (free procs, units, etc.). }
+function VisibilityGlyph(const AModifiers: string): string;
 
 implementation
 
@@ -65,7 +69,7 @@ begin
     nkUnit:
       begin Result.Fill := CL_UNIT; Result.Shape := nsBox; end;
     nkClass, nkInterface, nkRecord, nkType:
-      begin Result.Fill := CL_TYPE; Result.Shape := nsEllipse; end;
+      begin Result.Fill := CL_TYPE; Result.Shape := nsRoundBox; end;
     nkMethod, nkProcedure, nkFunction, nkProperty, nkField, nkConst, nkVar:
       begin Result.Fill := CL_MEMBER; Result.Shape := nsEllipse; end;
     nkSqlTable, nkSqlView:
@@ -87,6 +91,37 @@ begin
   else
     begin Result.Fill := CL_OTHER; Result.Shape := nsEllipse; end;
   end;
+end;
+
+function VisibilityGlyph(const AModifiers: string): string;
+  { case-insensitive substring test; W must be lowercase (no SysUtils dep) }
+  function HasWord(const S, W: string): Boolean;
+  var
+    I, J: Integer;
+    Ok:   Boolean;
+    C:    Char;
+  begin
+    Result := False;
+    if (S = '') or (Length(W) > Length(S)) then Exit;
+    for I := 1 to Length(S) - Length(W) + 1 do
+    begin
+      Ok := True;
+      for J := 1 to Length(W) do
+      begin
+        C := S[I + J - 1];
+        if (C >= 'A') and (C <= 'Z') then C := Chr(Ord(C) + 32);
+        if C <> W[J] then begin Ok := False; Break; end;
+      end;
+      if Ok then Exit(True);
+    end;
+  end;
+begin
+  { check 'published' before 'public' (distinct, but explicit for clarity) }
+  if HasWord(AModifiers, 'published') then Result := '~'
+  else if HasWord(AModifiers, 'protected') then Result := '#'
+  else if HasWord(AModifiers, 'private') then Result := '-'
+  else if HasWord(AModifiers, 'public') then Result := '+'
+  else Result := '';
 end;
 
 function EdgeStyleFor(AKind: TGraphEdgeKind; const ASection: string;
