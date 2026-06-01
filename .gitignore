@@ -33,3 +33,7 @@ bin/
 
 # Test results
 tests/autotest/results/
+
+# Stray build logs
+build_out.txt
+build_err.txt
