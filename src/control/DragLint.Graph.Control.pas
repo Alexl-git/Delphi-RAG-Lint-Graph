@@ -46,7 +46,7 @@ interface
 uses
   System.SysUtils, System.Classes, System.Types, System.Math,
   System.UITypes, System.Generics.Collections,
-  Vcl.Controls, Vcl.Graphics, Vcl.Forms, Vcl.ExtCtrls,
+  Vcl.Controls, Vcl.Graphics, Vcl.Forms, Vcl.ExtCtrls, Vcl.Menus,
   Winapi.Windows, Winapi.Messages,
   DragLint.Graph.Types,
   DragLint.Graph.Source,
@@ -115,6 +115,14 @@ type
     { UML class-box geometry from the last paint, for box/row hit-testing. }
     FUmlBoxes: TArray<TUmlBoxHit>;
 
+    { Right-click context menu + the node it was raised on. }
+    FPopup:          TPopupMenu;
+    FMiOpen:         TMenuItem;
+    FMiWhereUsed:    TMenuItem;
+    FMiGotoIntf:     TMenuItem;
+    FMiCenter:       TMenuItem;
+    FContextNodeIdx: Integer;
+
     { Optional progressive relayout timer (Phase-0 proven) }
     FAnimTimer:   TTimer;
 
@@ -157,6 +165,15 @@ type
     { If (SX,SY) falls in a drawn UML class-box, act on it (member row -> open
       that member; title -> select/open the type) and return True. }
     function  HandleUmlBoxClick(SX, SY: Integer): Boolean;
+    { Resolve the most specific node under (SX,SY): a UML member row -> that
+      member; a UML box title -> the type; otherwise the circle node. -1 if none. }
+    function  NodeIdxAt(SX, SY: Integer): Integer;
+    { Right-click context menu. }
+    procedure ShowContextMenu(SX, SY: Integer);
+    procedure CtxOpenSource(Sender: TObject);
+    procedure CtxWhereUsed(Sender: TObject);
+    procedure CtxGotoInterface(Sender: TObject);
+    procedure CtxCenter(Sender: TObject);
 
     { Returns the cached projection, rebuilding it if necessary. }
     function  CurrentProjection: TGraphProjection;
@@ -283,6 +300,30 @@ begin
   FAnimTimer.Enabled  := False;
   FAnimTimer.Interval := 33;   { ~30 fps }
   FAnimTimer.OnTimer  := AnimTick;
+
+  { Right-click context menu (built in code so the control is self-contained). }
+  FContextNodeIdx := -1;
+  FPopup := TPopupMenu.Create(Self);
+
+  FMiOpen := TMenuItem.Create(FPopup);
+  FMiOpen.Caption := 'Open Source (Definition)';
+  FMiOpen.OnClick := CtxOpenSource;
+  FPopup.Items.Add(FMiOpen);
+
+  FMiGotoIntf := TMenuItem.Create(FPopup);
+  FMiGotoIntf.Caption := 'Go to Interface';
+  FMiGotoIntf.OnClick := CtxGotoInterface;
+  FPopup.Items.Add(FMiGotoIntf);
+
+  FMiWhereUsed := TMenuItem.Create(FPopup);
+  FMiWhereUsed.Caption := 'Where Used (focus neighborhood)';
+  FMiWhereUsed.OnClick := CtxWhereUsed;
+  FPopup.Items.Add(FMiWhereUsed);
+
+  FMiCenter := TMenuItem.Create(FPopup);
+  FMiCenter.Caption := 'Center Here';
+  FMiCenter.OnClick := CtxCenter;
+  FPopup.Items.Add(FMiCenter);
 end;
 
 destructor TDragLintGraphControl.Destroy;
@@ -692,6 +733,133 @@ begin
   end;
 end;
 
+function TDragLintGraphControl.NodeIdxAt(SX, SY: Integer): Integer;
+var
+  I, RowIdx, NIdx: Integer;
+  HB: TUmlBoxHit;
+  Proj: TGraphProjection;
+begin
+  Result := -1;
+  if FVM = nil then Exit;
+  { UML boxes first: a member row resolves to that member, else the type }
+  for I := High(FUmlBoxes) downto 0 do
+  begin
+    HB := FUmlBoxes[I];
+    if (SX < HB.Box.Left) or (SX >= HB.Box.Right) or
+       (SY < HB.Box.Top) or (SY >= HB.Box.Bottom) then
+      Continue;
+    if (SY >= HB.RowTop) and (HB.RowH > 0) then
+    begin
+      RowIdx := (SY - HB.RowTop) div HB.RowH;
+      if (RowIdx >= 0) and (RowIdx < Length(HB.Members)) then
+        Exit(HB.Members[RowIdx]);
+    end;
+    Exit(HB.NodeIdx);
+  end;
+  { circle nodes }
+  Proj := CurrentProjection;
+  NIdx := HitTestProjNode(SX, SY, Proj);
+  if NIdx >= 0 then
+    Result := Proj.Nodes[NIdx].NodeIdx;
+end;
+
+procedure TDragLintGraphControl.ShowContextMenu(SX, SY: Integer);
+var
+  P: TPoint;
+  N: PGraphNode;
+  HasIntf: Boolean;
+  I, Other: Integer;
+  Proj: TGraphProjection;
+begin
+  FContextNodeIdx := NodeIdxAt(SX, SY);
+  if FContextNodeIdx < 0 then Exit;
+  N := FVM.Data.NodeAt(FContextNodeIdx);
+
+  { right-click also selects, so the status bar / highlight follow }
+  FVM.SelectNode(N.Id);
+  Invalidate;
+  if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+
+  FMiOpen.Enabled := (N.FilePath <> '') and Assigned(FOnOpenSource);
+
+  { enable "Go to Interface" only when an edge connects this node to one }
+  HasIntf := False;
+  Proj := CurrentProjection;
+  for I := 0 to High(Proj.Edges) do
+  begin
+    Other := -1;
+    if Proj.Edges[I].SourceIdx = FContextNodeIdx then
+      Other := Proj.Edges[I].TargetIdx
+    else if Proj.Edges[I].TargetIdx = FContextNodeIdx then
+      Other := Proj.Edges[I].SourceIdx;
+    if (Other >= 0) and (FVM.Data.NodeAt(Other).Kind = nkInterface) then
+    begin
+      HasIntf := True;
+      Break;
+    end;
+  end;
+  FMiGotoIntf.Enabled := HasIntf;
+
+  P := ClientToScreen(Point(SX, SY));
+  FPopup.Popup(P.X, P.Y);
+end;
+
+procedure TDragLintGraphControl.CtxOpenSource(Sender: TObject);
+begin
+  if (FVM = nil) or (FContextNodeIdx < 0) then Exit;
+  if Assigned(FOnOpenSource) then
+    FOnOpenSource(Self, FVM.Data.NodeAt(FContextNodeIdx));
+end;
+
+procedure TDragLintGraphControl.CtxWhereUsed(Sender: TObject);
+var
+  N: PGraphNode;
+begin
+  if (FVM = nil) or (FContextNodeIdx < 0) then Exit;
+  N := FVM.Data.NodeAt(FContextNodeIdx);
+  FVM.SetFocus(N.Id, 1);          { dim to the 1-hop neighborhood }
+  FFocusActive := True;
+  FProjValid := False;
+  Invalidate;
+  if Assigned(FOnViewChanged) then FOnViewChanged(Self);
+end;
+
+procedure TDragLintGraphControl.CtxGotoInterface(Sender: TObject);
+var
+  I, Other: Integer;
+  Proj: TGraphProjection;
+begin
+  if (FVM = nil) or (FContextNodeIdx < 0) then Exit;
+  Proj := CurrentProjection;
+  for I := 0 to High(Proj.Edges) do
+  begin
+    Other := -1;
+    if Proj.Edges[I].SourceIdx = FContextNodeIdx then
+      Other := Proj.Edges[I].TargetIdx
+    else if Proj.Edges[I].TargetIdx = FContextNodeIdx then
+      Other := Proj.Edges[I].SourceIdx;
+    if (Other >= 0) and (FVM.Data.NodeAt(Other).Kind = nkInterface) then
+    begin
+      FVM.SelectNode(FVM.Data.NodeAt(Other).Id);
+      Invalidate;
+      if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+      Exit;
+    end;
+  end;
+end;
+
+procedure TDragLintGraphControl.CtxCenter(Sender: TObject);
+var
+  N: PGraphNode;
+begin
+  if (FVM = nil) or (FContextNodeIdx < 0) then Exit;
+  N := FVM.Data.NodeAt(FContextNodeIdx);
+  FOffsetX := N.X;   { FOffsetX/Y is the world point at screen center }
+  FOffsetY := N.Y;
+  Invalidate;
+  if Assigned(FOnZoomChanged) then FOnZoomChanged(Self);
+end;
+
 procedure TDragLintGraphControl.DrawArrowHead(PA, PB: TPoint);
 var
   DX, DY, Len: Double;
@@ -848,7 +1016,7 @@ begin
     Canvas.Pen.Width := 1;
   end;
   Canvas.Pen.Style := psSolid;
-  Canvas.RoundRect(BoxL, BoxT, BoxL + W, BoxT + H, 8, 8);
+  Canvas.RoundRect(BoxL, BoxT, BoxL + W, BoxT + H, 9, 9);
 
   { title text + a kind-colored separator line under it (cleaner than a filled
     bar over the rounded corners) }
@@ -992,7 +1160,7 @@ begin
       var BH: Integer := Canvas.TextHeight('Ay') + 8;
       var BL: Integer := P.X - BW div 2;
       var BT: Integer := P.Y - BH div 2;
-      Canvas.RoundRect(BL, BT, BL + BW, BT + BH, 8, 8);
+      Canvas.RoundRect(BL, BT, BL + BW, BT + BH, 9, 9);
       var Lum: Integer := (GetRValue(FillCol) * 299 + GetGValue(FillCol) * 587 +
                            GetBValue(FillCol) * 114) div 1000;
       Canvas.Brush.Style := bsClear;
@@ -1180,6 +1348,13 @@ var
   HasChildren: Boolean;
 begin
   inherited;
+  if Button = mbRight then
+  begin
+    SetFocus;
+    if FVM <> nil then
+      ShowContextMenu(X, Y);
+    Exit;
+  end;
   if Button <> mbLeft then Exit;
   SetFocus;
   if FVM = nil then Exit;

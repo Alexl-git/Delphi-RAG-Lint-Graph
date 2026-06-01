@@ -39,6 +39,7 @@ type
     procedure FormShow(Sender: TObject);
     procedure WMLoadGraph(var Msg: TMessage); message WM_LOADGRAPH;
     procedure GraphNodeClick(Sender: TObject; const A: TGraphNodeEventArgs);
+    procedure GraphSelectionChanged(Sender: TObject);
     procedure GraphOpenSource(Sender: TObject; ANode: PGraphNode);
     procedure GraphCrossDbJump(Sender: TObject; const AName: string);
     procedure GraphViewChanged(Sender: TObject);
@@ -118,7 +119,8 @@ begin
   FGraph := TDragLintGraphControl.Create(Self);
   FGraph.Parent := Self;
   FGraph.Align := alClient;
-  FGraph.OnNodeClick    := GraphNodeClick;
+  FGraph.OnNodeClick       := GraphNodeClick;
+  FGraph.OnSelectionChange := GraphSelectionChanged;
   FGraph.OnOpenSource   := GraphOpenSource;
   FGraph.OnCrossDbJump  := GraphCrossDbJump;
   FGraph.OnViewChanged  := GraphViewChanged;
@@ -273,6 +275,41 @@ begin
   Doc := FVM.SelectedDoc;
   if Doc.HasDoc and (Doc.Summary <> '') then
     Info := Info + '  -- ' + Doc.Summary;
+  FStatus.SimpleText := Info;
+end;
+
+procedure TfrmMain.GraphSelectionChanged(Sender: TObject);
+var
+  Idx:  Integer;
+  N:    PGraphNode;
+  Kind: string;
+  Info: string;
+begin
+  if FVM = nil then Exit;
+  Idx := FVM.SelectedNodeIndex;
+  if Idx < 0 then Exit;
+  N := FVM.Data.NodeAt(Idx);
+  case N.Kind of
+    nkUnit:      Kind := 'Unit';
+    nkClass:     Kind := 'Class';
+    nkInterface: Kind := 'Interface';
+    nkRecord:    Kind := 'Record';
+    nkType:      Kind := 'Type';
+    nkMethod:    Kind := 'Method';
+    nkProcedure: Kind := 'Procedure';
+    nkFunction:  Kind := 'Function';
+    nkProperty:  Kind := 'Property';
+    nkField:     Kind := 'Field';
+    nkConst:     Kind := 'Const';
+    nkVar:       Kind := 'Var';
+    nkProject:   Kind := 'Project';
+    nkDfmForm:   Kind := 'Form';
+  else
+    Kind := 'Symbol';
+  end;
+  Info := Kind + ': ' + N.Id;
+  if N.FilePath <> '' then
+    Info := Info + Format('  (%s:%d)', [ExtractFileName(N.FilePath), N.Line]);
   FStatus.SimpleText := Info;
 end;
 
