@@ -3,11 +3,16 @@ unit DragLint.Graph.Source.Db;
 { TDbGraphSource: IGraphSource implementation over a drag-lint SQLite database.
   ONLY this unit links FireDAC; all P1/P2 units remain FireDAC-free.
 
-  Scope note: LoadTopology loads an entire store's graph.  This is impractical
-  for very large stores (e.g. the 881 MB library) -- the real product resolves/
-  jumps into such stores rather than rendering them whole.  Scoped/lazy loading
-  for huge stores is a deferred LOD concern; P3 Task 1 implements straightforward
-  full-store load (fine for project-sized DBs). }
+  Node cap: FMaxNodes (default 20000) bounds how many symbol rows are loaded.
+  LoadTopology first counts all symbols; if the count exceeds FMaxNodes, only
+  the first FMaxNodes symbols are loaded (LIMIT :max in the SELECT) and
+  FWasTruncated is set True.  The refs and unit_uses queries are bounded too:
+    - refs:      LIMIT (FMaxNodes * 50)  -- safety ceiling to avoid scanning
+                 2.5M rows on the library; a ref-per-node ceiling.
+    - unit_uses: LIMIT (FMaxNodes * 10)  -- smaller table, lighter bound.
+  Rows whose file_id is not in the loaded-file set are skipped in-code after
+  fetch so both queries stay simple (no IN-list of thousands). }
+
 
 interface
 
@@ -32,14 +37,27 @@ type
 
   TDbGraphSource = class(TInterfacedObject, IGraphSource)
   strict private
-    FConn:       TFDConnection;
-    FStoreIndex: Integer;
+    FConn:            TFDConnection;
+    FStoreIndex:      Integer;
+    FMaxNodes:        Integer;
+    FWasTruncated:    Boolean;
+    FTotalSymbolCount: Integer;
     procedure Connect(const ADbPath: string);
     procedure CheckSchema;
     function  KindTextToNodeKind(const AKind: string): TGraphNodeKind;
   public
     constructor Create(const ADbPath: string; AStoreIndex: Integer);
     destructor  Destroy; override;
+
+    { Node cap -- default 20000.  Set before calling LoadTopology. }
+    procedure SetMaxNodes(AValue: Integer);
+    function  MaxNodes: Integer;
+    { True when the last LoadTopology call stopped short because
+      TotalSymbolCount > MaxNodes. }
+    function  WasTruncated: Boolean;
+    { The full symbol count from SELECT COUNT(*) in the last LoadTopology call.
+      0 when LoadTopology has not been called yet. }
+    function  TotalSymbolCount: Integer;
 
     { IGraphSource }
     function StoreIndex: Integer;
@@ -76,9 +94,33 @@ implementation
 constructor TDbGraphSource.Create(const ADbPath: string; AStoreIndex: Integer);
 begin
   inherited Create;
-  FStoreIndex := AStoreIndex;
+  FStoreIndex       := AStoreIndex;
+  FMaxNodes         := 20000;
+  FWasTruncated     := False;
+  FTotalSymbolCount := 0;
   Connect(ADbPath);
   CheckSchema;
+end;
+
+procedure TDbGraphSource.SetMaxNodes(AValue: Integer);
+begin
+  if AValue < 1 then AValue := 1;
+  FMaxNodes := AValue;
+end;
+
+function TDbGraphSource.MaxNodes: Integer;
+begin
+  Result := FMaxNodes;
+end;
+
+function TDbGraphSource.WasTruncated: Boolean;
+begin
+  Result := FWasTruncated;
+end;
+
+function TDbGraphSource.TotalSymbolCount: Integer;
+begin
+  Result := FTotalSymbolCount;
 end;
 
 destructor TDbGraphSource.Destroy;
@@ -205,6 +247,7 @@ function TDbGraphSource.LoadTopology(AData: TGraphData): Boolean;
 var
   Q:               TFDQuery;
   FileMap:         TDictionary<Int64, string>;
+  LoadedFileIds:   TDictionary<Int64, Boolean>;
   IdToQName:       TDictionary<Int64, string>;
   FileIdToUnit:    TDictionary<Int64, string>;
   DocSymIds:       TDictionary<Int64, Boolean>;
@@ -232,13 +275,40 @@ var
   BestStart:       Integer;
   BestQName:       string;
   J:               Integer;
+  RefsLimit:       Integer;
+  UsesLimit:       Integer;
 begin
   Result := False;
   if AData = nil then Exit;
   AData.Clear;
+  FWasTruncated     := False;
+  FTotalSymbolCount := 0;
+
+  { ---- 0. Count total symbols to detect truncation ---- }
+  Q := TFDQuery.Create(nil);
+  try
+    Q.Connection := FConn;
+    Q.SQL.Text   := 'SELECT COUNT(*) FROM symbols';
+    Q.Open;
+    FTotalSymbolCount := Q.Fields[0].AsInteger;
+    Q.Close;
+  finally
+    Q.Free;
+  end;
+  FWasTruncated := (FTotalSymbolCount > FMaxNodes);
+
+  { Derived safety limits for refs / unit_uses scans.
+    refs:      FMaxNodes * 50  (ref-per-node ceiling for 2.5M-row library).
+    unit_uses: FMaxNodes * 10  (smaller table, lighter bound). }
+  RefsLimit := FMaxNodes * 50;
+  UsesLimit := FMaxNodes * 10;
 
   { ---- 1. Build file_id -> path map ---- }
   FileMap := TDictionary<Int64, string>.Create;
+  { Tracks which file_ids are reachable from loaded symbols.
+    Rows in refs / unit_uses whose file_id is NOT in this set are skipped
+    in-code (no IN-list needed; avoids scanning 2.5M rows fully). }
+  LoadedFileIds := TDictionary<Int64, Boolean>.Create;
   try
     Q := TFDQuery.Create(nil);
     try
@@ -256,13 +326,17 @@ begin
       Q.Free;
     end;
 
-    { ---- 2. Build symbol id -> qualified_name map ---- }
+    { ---- 2. Build symbol id -> qualified_name map (capped) ---- }
     IdToQName := TDictionary<Int64, string>.Create;
     try
       Q := TFDQuery.Create(nil);
       try
         Q.Connection := FConn;
-        Q.SQL.Text   := 'SELECT id, qualified_name FROM symbols';
+        { LIMIT :max -- plain LIMIT, no ORDER BY, for speed on huge tables.
+          FMaxNodes bounds materialisation; WasTruncated records the shortfall. }
+        Q.SQL.Text   :=
+          'SELECT id, qualified_name FROM symbols LIMIT :max';
+        Q.ParamByName('max').AsInteger := FMaxNodes;
         Q.Open;
         while not Q.Eof do
         begin
@@ -296,8 +370,8 @@ begin
           Q.Free;
         end;
 
-        { ---- 4. Load symbols -> graph nodes; build file_id->unit map
-               and per-file symbol ranges for enclosing-symbol resolution ---- }
+        { ---- 4. Load symbols -> graph nodes; build file_id->unit map,
+               loaded-file set, and per-file symbol ranges ---- }
         FileIdToUnit := TDictionary<Int64, string>.Create;
         { TObjectDictionary owns the TList<TSymbolRange> values }
         FileRanges   := TObjectDictionary<Int64, TList<TSymbolRange>>.Create(
@@ -306,10 +380,13 @@ begin
           Q := TFDQuery.Create(nil);
           try
             Q.Connection := FConn;
+            { LIMIT :max matches the id->qname cap so only loaded symbols
+              become nodes.  No ORDER BY -- raw storage order is fastest. }
             Q.SQL.Text   :=
               'SELECT id, file_id, parent_id, kind, name, qualified_name, ' +
               '  signature, start_line, start_col, end_line ' +
-              'FROM symbols';
+              'FROM symbols LIMIT :max';
+            Q.ParamByName('max').AsInteger := FMaxNodes;
             Q.Open;
             while not Q.Eof do
             begin
@@ -349,6 +426,9 @@ begin
 
               AData.AddNode(Node);
 
+              { Track this file as reachable (for refs/unit_uses filtering) }
+              LoadedFileIds.AddOrSetValue(FileId, True);
+
               { Populate file_id -> unit qualified_name map }
               if Q.FieldByName('kind').AsString = 'unit' then
                 FileIdToUnit.AddOrSetValue(FileId, Node.Id);
@@ -374,7 +454,8 @@ begin
           { ---- 5. Load unit_uses -> ekUses edges + external nodes ---- }
           { External nodes are added BEFORE BuildHierarchy so BuildHierarchy
             can parent them under @project like any other rootless unit.
-            Deduplication via ExtSeen dictionary. }
+            Deduplication via ExtSeen dictionary.
+            LIMIT UsesLimit prevents scanning all rows on huge stores. }
           ExtSeen := TDictionary<string, Boolean>.Create;
           try
             Q := TFDQuery.Create(nil);
@@ -382,13 +463,21 @@ begin
               Q.Connection := FConn;
               Q.SQL.Text   :=
                 'SELECT file_id, unit_name, section, target_file_id ' +
-                'FROM unit_uses';
+                'FROM unit_uses LIMIT :lim';
+              Q.ParamByName('lim').AsInteger := UsesLimit;
               Q.Open;
               while not Q.Eof do
               begin
                 FileId   := Q.FieldByName('file_id').AsLargeInt;
                 UnitName := Q.FieldByName('unit_name').AsString;
                 Section  := Q.FieldByName('section').AsString;
+
+                { Skip rows from files not in the loaded set }
+                if not LoadedFileIds.ContainsKey(FileId) then
+                begin
+                  Q.Next;
+                  Continue;
+                end;
 
                 { Source: the unit symbol for this file }
                 if not FileIdToUnit.TryGetValue(FileId, SrcQName) then
@@ -450,16 +539,27 @@ begin
           end;
 
           { ---- 6. Load refs -> call/typeref/dfm/sqltableref edges
-                 using enclosing-symbol resolution ---- }
+                 using enclosing-symbol resolution ----
+            LIMIT RefsLimit is a safety ceiling so the library's 2.5M ref rows
+            do not all stream; only refs from loaded files are processed. }
           Q := TFDQuery.Create(nil);
           try
             Q.Connection := FConn;
             Q.SQL.Text   :=
               'SELECT symbol_id, file_id, kind, name_text, start_line ' +
-              'FROM refs';
+              'FROM refs LIMIT :lim';
+            Q.ParamByName('lim').AsInteger := RefsLimit;
             Q.Open;
             while not Q.Eof do
             begin
+              { Skip rows from files not in the loaded set }
+              FileId := Q.FieldByName('file_id').AsLargeInt;
+              if not LoadedFileIds.ContainsKey(FileId) then
+              begin
+                Q.Next;
+                Continue;
+              end;
+
               { Map ref kind to edge kind; skip unrecognised kinds }
               RefKindText := Q.FieldByName('kind').AsString;
               if      RefKindText = 'call'          then EdgeKind := ekCalls
@@ -487,7 +587,6 @@ begin
 
               { Source: find innermost symbol in same file whose range
                 contains the ref's start_line (greatest StartLine wins) }
-              FileId  := Q.FieldByName('file_id').AsLargeInt;
               RefLine := Q.FieldByName('start_line').AsInteger;
               SrcQName  := '';
               BestStart := -1;
@@ -546,6 +645,7 @@ begin
       IdToQName.Free;
     end;
   finally
+    LoadedFileIds.Free;
     FileMap.Free;
   end;
 end;

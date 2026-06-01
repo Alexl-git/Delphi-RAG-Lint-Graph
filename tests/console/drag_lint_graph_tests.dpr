@@ -19,7 +19,8 @@ uses
   Test.Db.Fixtures in 'Test.Db.Fixtures.pas',
   Test.Graph.Source.Db in 'Test.Graph.Source.Db.pas',
   DragLint.Graph.Style in '..\..\src\control\DragLint.Graph.Style.pas',
-  Test.Graph.Style in 'Test.Graph.Style.pas';
+  Test.Graph.Style in 'Test.Graph.Style.pas',
+  Test.Db.Perf in 'Test.Db.Perf.pas';
 
 begin
   WriteLn('drag-lint-graph console tests');
