@@ -9,12 +9,15 @@ interface
 uses
   System.SysUtils, System.Classes, System.Math,
   Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls,
-  Winapi.Windows, Winapi.ShellAPI,
+  Winapi.Windows, Winapi.Messages, Winapi.ShellAPI,
   DragLint.Graph.Types,
   DragLint.Graph.Source,
   DragLint.Graph.Source.Db,
   DragLint.Graph.ViewModel,
   DragLint.Graph.Control;
+
+const
+  WM_LOADGRAPH = WM_USER + 100;
 
 type
   TfrmMain = class(TForm)
@@ -27,8 +30,13 @@ type
     FSyncingZoom: Boolean;
     FVM:         IGraphViewModel;
     FCatalog:    IDbCatalog;
+    FDbPaths:    TArray<string>;
+    FLoaded:     Boolean;
     procedure CreateControls;
-    procedure ParseAndLoad;
+    procedure ParseDbArgs;
+    procedure RunLoad;
+    procedure FormShow(Sender: TObject);
+    procedure WMLoadGraph(var Msg: TMessage); message WM_LOADGRAPH;
     procedure GraphNodeClick(Sender: TObject; const A: TGraphNodeEventArgs);
     procedure GraphOpenSource(Sender: TObject; const AId: string);
     procedure GraphCrossDbJump(Sender: TObject; const AName: string);
@@ -61,8 +69,10 @@ begin
   Position := poScreenCenter;
   ClientWidth := 1100;
   ClientHeight := 700;
+  FLoaded := False;
   CreateControls;
-  ParseAndLoad;
+  ParseDbArgs;
+  OnShow := FormShow;
 end;
 
 procedure TfrmMain.CreateControls;
@@ -75,8 +85,7 @@ begin
   FStatus := TStatusBar.Create(Self);
   FStatus.Parent := Self;
   FStatus.SimplePanel := True;
-  FStatus.SimpleText :=
-    'Pan: drag empty area | Zoom: mouse wheel / slider | Click node to select | Ctrl+click to open source';
+  FStatus.SimpleText := 'Loading graph...';
 
   { Fit button - anchored top-right, left of zoom bar }
   FFitBtn := TButton.Create(Self);
@@ -127,35 +136,51 @@ begin
   FShowAllBtn.OnClick := ShowAllBtnClick;
 end;
 
-procedure TfrmMain.ParseAndLoad;
+procedure TfrmMain.ParseDbArgs;
 var
   I:     Integer;
   S:     string;
-  Paths: array of string;
   Count: Integer;
 begin
-  { --- collect --db <path> arguments (repeatable) --- }
   Count := 0;
-  SetLength(Paths, 0);
+  SetLength(FDbPaths, 0);
   I := 1;
   while I <= ParamCount do
   begin
     S := ParamStr(I);
     if (LowerCase(S) = '--db') and (I < ParamCount) then
     begin
-      SetLength(Paths, Count + 1);
-      Paths[Count] := ParamStr(I + 1);
+      SetLength(FDbPaths, Count + 1);
+      FDbPaths[Count] := ParamStr(I + 1);
       Inc(Count);
       Inc(I, 2);
     end
     else
       Inc(I);
   end;
+end;
 
+procedure TfrmMain.FormShow(Sender: TObject);
+begin
+  if not FLoaded then
+  begin
+    FLoaded := True;
+    PostMessage(Handle, WM_LOADGRAPH, 0, 0);
+  end;
+end;
+
+procedure TfrmMain.WMLoadGraph(var Msg: TMessage);
+begin
+  RunLoad;
+  SetForegroundWindow(Handle);
+end;
+
+procedure TfrmMain.RunLoad;
+begin
   { --- create VM --- }
   FVM := TGraphViewModel.Create;
 
-  if Count = 0 then
+  if Length(FDbPaths) = 0 then
   begin
     FGraph.Bind(FVM);
     FStatus.SimpleText := 'Pass --db <drag-lint.sqlite> to load a graph.';
@@ -164,7 +189,7 @@ begin
   end;
 
   { --- build catalog and open store 0 --- }
-  FCatalog := TDbCatalog.Create(Paths);
+  FCatalog := TDbCatalog.Create(FDbPaths);
   FVM.SetCatalog(FCatalog);
 
   try
@@ -185,7 +210,7 @@ begin
     FStatus.SimpleText := 'Pass --db <drag-lint.sqlite> to load a graph.'
   else
     FStatus.SimpleText := Format('Loaded %s: %d nodes',
-      [ExtractFileName(Paths[0]), FVM.Data.NodeCount]);
+      [ExtractFileName(FDbPaths[0]), FVM.Data.NodeCount]);
 
   { Force a projection pass so FHiddenTopLevelCount is current before
     UpdateShowAllButton reads it -- Bind only schedules a paint. }

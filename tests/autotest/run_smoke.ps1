@@ -4,6 +4,7 @@
 #   - with --db C:\Projects\DB\ORM3\drag-lint.sqlite  (if the file exists)
 #   - with no args otherwise (shows the no-db message)
 # Asserts the process stays alive ~3s without exiting (crash = FAIL).
+# Asserts the process has a visible top-level window within ~5s (F5 guard).
 # Kills the process after the check.
 #
 # Exit 0 = PASS, non-zero = FAIL.
@@ -70,12 +71,49 @@ $t1 = [Diagnostics.Stopwatch]::StartNew()
 $proc = Start-Process -FilePath $Exe -ArgumentList $launchArgs -PassThru
 Start-Sleep -Seconds 3
 $alive = -not $proc.HasExited
-if ($alive) {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+if (-not $alive) {
+    # process already exited -- kill attempt is a no-op but record the check
 }
 $t1.Stop()
-$exitStr = if ($proc.HasExited) { "exit=$($proc.ExitCode)" } else { "alive (killed)" }
+$exitStr = if ($proc.HasExited) { "exit=$($proc.ExitCode)" } else { "alive" }
 Write-Check $launchDesc $alive $exitStr $t1.Elapsed.TotalMilliseconds
+
+# --- Step 4: window visible check (F5 guard) ---
+Write-Host "`n== Window visible (F5 guard) ==" -ForegroundColor Cyan
+
+$tWin = [Diagnostics.Stopwatch]::StartNew()
+$visible = $false
+$winMs = 0.0
+if ($alive) {
+    # Poll up to 5s for MainWindowHandle to become non-zero
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while ($deadline.Elapsed.TotalSeconds -lt 5) {
+        $proc.Refresh()
+        if ($proc.MainWindowHandle -ne 0) {
+            $visible = $true
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    $winMs = $deadline.Elapsed.TotalMilliseconds
+} else {
+    # Process crashed -- window can never appear
+    $visible = $false
+    $winMs = 0.0
+}
+$tWin.Stop()
+
+$winDetail = if ($visible) {
+    "MainWindowHandle non-zero after {0:N0}ms" -f $winMs
+} else {
+    "MainWindowHandle still 0 after 5s (F5 reproducing)"
+}
+Write-Check "window visible after load" $visible $winDetail $tWin.Elapsed.TotalMilliseconds
+
+# --- Kill process after checks ---
+if ($alive -and -not $proc.HasExited) {
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+}
 
 # --- Summary ---
 Write-Host ''
