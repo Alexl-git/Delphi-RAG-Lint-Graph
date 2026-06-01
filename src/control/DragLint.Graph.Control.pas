@@ -70,6 +70,11 @@ type
                                    const AId: string) of object;
   TGraphNameEvent      = procedure(Sender: TObject;
                                    const AName: string) of object;
+  { Open-source carries the clicked node itself so the host can read its exact
+    FilePath/Line/Col/DbId -- no qualified-name re-lookup, so overloads resolve
+    to the precise row the user clicked (contract Q1). }
+  TGraphOpenSourceEvent = procedure(Sender: TObject;
+                                    ANode: PGraphNode) of object;
 
   TDragLintGraphControl = class(TCustomControl)
   strict private
@@ -112,7 +117,7 @@ type
     FOnNodeClick:       TGraphNodeEvent;
     FOnNodeHover:       TGraphHoverEvent;
     FOnSelectionChange: TNotifyEvent;
-    FOnOpenSource:      TGraphIdEvent;
+    FOnOpenSource:      TGraphOpenSourceEvent;
     FOnCrossDbJump:     TGraphNameEvent;
     FOnViewChanged:     TNotifyEvent;
     FOnZoomChanged:     TNotifyEvent;
@@ -201,8 +206,8 @@ type
                                                   write FOnNodeHover;
     property OnSelectionChange:  TNotifyEvent     read FOnSelectionChange
                                                   write FOnSelectionChange;
-    property OnOpenSource:       TGraphIdEvent    read FOnOpenSource
-                                                  write FOnOpenSource;
+    property OnOpenSource:       TGraphOpenSourceEvent read FOnOpenSource
+                                                       write FOnOpenSource;
     property OnCrossDbJump:      TGraphNameEvent  read FOnCrossDbJump
                                                   write FOnCrossDbJump;
     { Fired after VM state changes (collapse/focus/select/nav/store/show-all).
@@ -1001,7 +1006,7 @@ begin
         Shift -> focus this node's neighborhood (1 hop)
         plain -> container expands/collapses (F6); leaf opens source (F7) }
     if (ssCtrl in Shift) and Assigned(FOnOpenSource) then
-      FOnOpenSource(Self, N.Id)
+      FOnOpenSource(Self, N)
     else if ssShift in Shift then
     begin
       FVM.SetFocus(N.Id, 1);
@@ -1010,7 +1015,7 @@ begin
     else if FExpandOnSingleClick and HasChildren then
       FVM.ToggleCollapse(N.Id)
     else if (not HasChildren) and Assigned(FOnOpenSource) then
-      FOnOpenSource(Self, N.Id);
+      FOnOpenSource(Self, N);
     Exit;
   end;
 

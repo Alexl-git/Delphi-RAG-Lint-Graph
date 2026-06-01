@@ -39,7 +39,7 @@ type
     procedure FormShow(Sender: TObject);
     procedure WMLoadGraph(var Msg: TMessage); message WM_LOADGRAPH;
     procedure GraphNodeClick(Sender: TObject; const A: TGraphNodeEventArgs);
-    procedure GraphOpenSource(Sender: TObject; const AId: string);
+    procedure GraphOpenSource(Sender: TObject; ANode: PGraphNode);
     procedure GraphCrossDbJump(Sender: TObject; const AName: string);
     procedure GraphViewChanged(Sender: TObject);
     procedure ShowAllBtnClick(Sender: TObject);
@@ -276,27 +276,49 @@ begin
   FStatus.SimpleText := Info;
 end;
 
-procedure TfrmMain.GraphOpenSource(Sender: TObject; const AId: string);
+procedure TfrmMain.GraphOpenSource(Sender: TObject; ANode: PGraphNode);
 var
   F: string;
-  L: Integer;
+  L, C: Integer;
 begin
-  if FVM = nil then Exit;
-  if not (FVM.LocateSymbol(AId, F, L) and (F <> '')) then
+  if (FVM = nil) or (ANode = nil) then Exit;
+
+  { The clicked node already carries its exact location (file/line/col,
+    contract Q1-Q3) -- no qualified-name re-lookup, so overloaded methods
+    resolve to the precise row the user clicked.  Fall back to LocateSymbol by
+    id only if the node has no path (e.g. a synthetic node). }
+  F := ANode.FilePath;
+  L := ANode.Line;
+  C := ANode.Col;
+
+  { DFM nodes: open the paired source unit, not the form designer (Q5). }
+  if SameText(ExtractFileExt(F), '.dfm') then
   begin
-    FStatus.SimpleText := 'Source not found for: ' + AId;
+    var PasF := ChangeFileExt(F, '.pas');
+    if FileExists(PasF) then
+    begin
+      F := PasF;
+      L := 1;          { line in the .dfm does not map to the .pas }
+      C := 1;
+    end;
+  end;
+
+  if F = '' then
+  begin
+    FStatus.SimpleText := 'No source location for: ' + ANode.Label_;
     Exit;
   end;
 
   { Prefer the running Delphi IDE via the drag-lint plugin's named pipe
-    (line-precise jump).  If no plugin is listening (standalone use),
-    fall back to the OS file association so the file still opens. }
-  if SendOpenSource(F, L) then
-    FStatus.SimpleText := Format('Opened in IDE: %s:%d', [F, L])
+    (caret-precise jump).  If no plugin is listening (standalone use), fall
+    back to the OS file association so the file still opens. }
+  if SendOpenSourceAt(F, L, C) then
+    FStatus.SimpleText := Format('Opened in IDE: %s:%d:%d', [F, L, C])
   else
   begin
     ShellExecute(0, 'open', PChar(F), nil, nil, SW_SHOWNORMAL);
-    FStatus.SimpleText := Format('Opened: %s  (line %d -- no IDE plugin listening)', [F, L]);
+    FStatus.SimpleText :=
+      Format('Opened: %s  (line %d -- no IDE plugin listening)', [F, L]);
   end;
 end;
 

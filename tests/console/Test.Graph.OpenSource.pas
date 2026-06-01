@@ -50,6 +50,24 @@ begin
     'spaces in path survive framing');
 end;
 
+procedure Test_BuildMessage_WithColumn;
+var
+  Bytes: TBytes;
+  Got:   string;
+begin
+  { contract v2: <file><TAB><line><TAB><col><LF> }
+  Bytes := BuildOpenSourceMessage('C:\Foo\Bar.pas', 128, 11);
+  Got := TEncoding.UTF8.GetString(Bytes);
+  CheckEqualsStr('C:\Foo\Bar.pas' + #9 + '128' + #9 + '11' + #10, Got,
+    'column field framed as 3rd TAB-separated value');
+
+  { col <= 0 is normalised to 1 so the plugin always gets a valid column }
+  Bytes := BuildOpenSourceMessage('C:\Foo\Bar.pas', 128, 0);
+  Got := TEncoding.UTF8.GetString(Bytes);
+  CheckEqualsStr('C:\Foo\Bar.pas' + #9 + '128' + #9 + '1' + #10, Got,
+    'non-positive column normalised to 1');
+end;
+
 { ---- 2. live round-trip ---- }
 
 type
@@ -184,6 +202,7 @@ end;
 initialization
   RegisterTest('OpenSource_BuildMessage_Framing', Test_BuildMessage_Framing);
   RegisterTest('OpenSource_BuildMessage_PathWithSpaces', Test_BuildMessage_PathWithSpaces);
+  RegisterTest('OpenSource_BuildMessage_WithColumn', Test_BuildMessage_WithColumn);
   RegisterTest('OpenSource_SendOpenSource_NoServer', Test_SendOpenSource_NoServer);
   RegisterTest('OpenSource_SendOpenSource_EmptyFile', Test_SendOpenSource_EmptyFile);
   RegisterTest('OpenSource_SendOpenSource_RoundTrip', Test_SendOpenSource_RoundTrip);

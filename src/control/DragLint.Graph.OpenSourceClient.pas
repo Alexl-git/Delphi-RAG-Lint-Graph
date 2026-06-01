@@ -58,6 +58,13 @@ const
   Exposed so the round-trip test (and the plugin author) can assert the exact
   byte layout without a live pipe. }
 function BuildOpenSourceMessage(const AFile: string; ALine: Integer): TBytes;
+  overload;
+{ Column-aware framing (contract v2):  <file><TAB><line><TAB><col><LF>.
+  ACol is the 1-based caret column; <= 0 is sent as 1.  The server reads the
+  line positionally and treats the column as optional, so this stays
+  back-compatible with a v1 (file+line only) reader. }
+function BuildOpenSourceMessage(const AFile: string; ALine, ACol: Integer):
+  TBytes; overload;
 
 { Sends an open-source request to the running plugin.
 
@@ -67,6 +74,10 @@ function BuildOpenSourceMessage(const AFile: string; ALine: Integer): TBytes;
 
   Never raises: all Win32 failures are reported as a False result. }
 function SendOpenSource(const AFile: string; ALine: Integer;
+  AWaitMs: Cardinal = 200): Boolean;
+{ Column-aware send (contract v2).  Distinct name (not an overload) so it never
+  collides with the file+line+waitMs signature above. }
+function SendOpenSourceAt(const AFile: string; ALine, ACol: Integer;
   AWaitMs: Cardinal = 200): Boolean;
 
 implementation
@@ -82,15 +93,28 @@ begin
   Result := TEncoding.UTF8.GetBytes(Line);
 end;
 
-function SendOpenSource(const AFile: string; ALine: Integer;
-  AWaitMs: Cardinal): Boolean;
+function BuildOpenSourceMessage(const AFile: string; ALine, ACol: Integer):
+  TBytes;
+var
+  Line: string;
+  Col:  Integer;
+begin
+  Col := ACol;
+  if Col < 1 then Col := 1;
+  Line := AFile + OPEN_SOURCE_SEP + IntToStr(ALine) +
+          OPEN_SOURCE_SEP + IntToStr(Col) + OPEN_SOURCE_TERM;
+  Result := TEncoding.UTF8.GetBytes(Line);
+end;
+
+{ Shared transport: writes one framed message to the pipe.  Returns True only
+  if a server was present AND the whole message was written.  Never raises. }
+function SendOpenSourceBytes(const AMsg: TBytes; AWaitMs: Cardinal): Boolean;
 var
   H:       THandle;
-  Msg:     TBytes;
   Written: DWORD;
 begin
   Result := False;
-  if AFile = '' then Exit;
+  if Length(AMsg) = 0 then Exit;
 
   { Fast no-server check: if no instance is available within AWaitMs we bail
     so the caller can ShellExecute instead of blocking the UI. }
@@ -100,11 +124,9 @@ begin
     OPEN_EXISTING, 0, 0);
   if H = INVALID_HANDLE_VALUE then Exit;
   try
-    Msg := BuildOpenSourceMessage(AFile, ALine);
-    if Length(Msg) = 0 then Exit;
     Written := 0;
-    if WriteFile(H, Msg[0], DWORD(Length(Msg)), Written, nil)
-       and (Written = DWORD(Length(Msg))) then
+    if WriteFile(H, AMsg[0], DWORD(Length(AMsg)), Written, nil)
+       and (Written = DWORD(Length(AMsg))) then
     begin
       FlushFileBuffers(H);
       Result := True;
@@ -112,6 +134,23 @@ begin
   finally
     CloseHandle(H);
   end;
+end;
+
+function SendOpenSource(const AFile: string; ALine: Integer;
+  AWaitMs: Cardinal): Boolean;
+begin
+  Result := False;
+  if AFile = '' then Exit;
+  Result := SendOpenSourceBytes(BuildOpenSourceMessage(AFile, ALine), AWaitMs);
+end;
+
+function SendOpenSourceAt(const AFile: string; ALine, ACol: Integer;
+  AWaitMs: Cardinal): Boolean;
+begin
+  Result := False;
+  if AFile = '' then Exit;
+  Result := SendOpenSourceBytes(
+    BuildOpenSourceMessage(AFile, ALine, ACol), AWaitMs);
 end;
 
 end.
