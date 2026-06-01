@@ -290,25 +290,38 @@ var
   AllBigPresent: Boolean;
   NodeIdx: Integer;
 begin
-  { 12 units: unit_i has i methods, so DescendantCount = i.
-    Biggest = unit_11 (11 methods), smallest = unit_0 (0), unit_1 (1). }
+  { --- Case 1: 30 units (>25 default threshold) ---
+    unit_i has i methods, so DescendantCount = i.
+    Defaults: Threshold=25, Limit=10.
+    Expected: cap applied, 10 shown, 20 hidden. }
   VM := TGraphViewModel.Create;
-  VM.SetSource(TPreloadedSource.Create(BuildManyUnitsGraph(12)));
+  VM.SetSource(TPreloadedSource.Create(BuildManyUnitsGraph(30)));
 
-  { --- default: ShowAll=False, Limit=10 --- }
   Proj := VM.Projection;
   ProjRootIdx := VM.Data.FindNodeIndex('@project');
-  Check(ProjRootIdx >= 0, 'project root present');
+  Check(ProjRootIdx >= 0, 'project root present (30 units)');
 
-  { Count top-level nodes (direct children of @project in projection) }
   TopCount := 0;
   for I := 0 to High(Proj.Nodes) do
     if VM.Data.ParentIndexOf(Proj.Nodes[I].NodeIdx) = ProjRootIdx then
       Inc(TopCount);
-  CheckEqualsInt(10, TopCount, 'default cap: exactly 10 top-level units');
-  CheckEqualsInt(2, VM.HiddenTopLevelCount, 'default cap: 2 units hidden');
+  CheckEqualsInt(10, TopCount, '30 units: cap applied, 10 top-level shown');
+  CheckEqualsInt(20, VM.HiddenTopLevelCount, '30 units: 20 hidden');
 
-  { The two SMALLEST units (unit_0, unit_1) must NOT be in the projection }
+  { The 10 BIGGEST units (unit_20..unit_29) must be present }
+  AllBigPresent := True;
+  for I := 20 to 29 do
+  begin
+    NodeIdx := VM.Data.FindNodeIndex('unit_' + IntToStr(I));
+    Found0 := False;
+    if NodeIdx >= 0 then
+      for J := 0 to High(Proj.Nodes) do
+        if Proj.Nodes[J].NodeIdx = NodeIdx then Found0 := True;
+    if not Found0 then AllBigPresent := False;
+  end;
+  Check(AllBigPresent, 'unit_20..unit_29 (top 10 biggest) all present');
+
+  { The two SMALLEST units must NOT be in the projection }
   Found0 := False;
   Found1 := False;
   for I := 0 to High(Proj.Nodes) do
@@ -320,39 +333,38 @@ begin
   Check(not Found0, 'unit_0 (smallest) excluded from projection');
   Check(not Found1, 'unit_1 (second smallest) excluded from projection');
 
-  { The 10 biggest units (unit_2..unit_11) must be present }
-  AllBigPresent := True;
-  for I := 2 to 11 do
-  begin
-    NodeIdx := VM.Data.FindNodeIndex('unit_' + IntToStr(I));
-    Found0 := False;
-    if NodeIdx >= 0 then
-      for J := 0 to High(Proj.Nodes) do
-        if Proj.Nodes[J].NodeIdx = NodeIdx then Found0 := True;
-    if not Found0 then AllBigPresent := False;
-  end;
-  Check(AllBigPresent, 'unit_2..unit_11 (top 10 biggest) all present');
-
-  { --- ShowAll=True: all 12 units present --- }
+  { ShowAll=True: all 30 shown, hidden=0 }
   VM.SetShowAllTopLevel(True);
   Proj := VM.Projection;
   TopCount := 0;
   for I := 0 to High(Proj.Nodes) do
     if VM.Data.ParentIndexOf(Proj.Nodes[I].NodeIdx) = ProjRootIdx then
       Inc(TopCount);
-  CheckEqualsInt(12, TopCount, 'ShowAll=True: all 12 units visible');
+  CheckEqualsInt(30, TopCount, 'ShowAll=True: all 30 units visible');
   CheckEqualsInt(0, VM.HiddenTopLevelCount, 'ShowAll=True: HiddenTopLevelCount=0');
 
-  { --- SetTopLevelLimit(5), ShowAll=False: 5 top-level units, 7 hidden --- }
-  VM.SetShowAllTopLevel(False);
-  VM.SetTopLevelLimit(5);
+  { --- Case 2: 20 units (<=25 threshold): adaptive -- cap NOT applied --- }
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildManyUnitsGraph(20)));
+
+  Proj := VM.Projection;
+  ProjRootIdx := VM.Data.FindNodeIndex('@project');
+  TopCount := 0;
+  for I := 0 to High(Proj.Nodes) do
+    if VM.Data.ParentIndexOf(Proj.Nodes[I].NodeIdx) = ProjRootIdx then
+      Inc(TopCount);
+  CheckEqualsInt(20, TopCount, '20 units (<=25): all 20 shown (no cap)');
+  CheckEqualsInt(0, VM.HiddenTopLevelCount, '20 units: HiddenTopLevelCount=0');
+
+  { --- Case 3: SetTopLevelCapThreshold(10), 20 units -> cap to 10 --- }
+  VM.SetTopLevelCapThreshold(10);
   Proj := VM.Projection;
   TopCount := 0;
   for I := 0 to High(Proj.Nodes) do
     if VM.Data.ParentIndexOf(Proj.Nodes[I].NodeIdx) = ProjRootIdx then
       Inc(TopCount);
-  CheckEqualsInt(5, TopCount, 'Limit=5: exactly 5 top-level units');
-  CheckEqualsInt(7, VM.HiddenTopLevelCount, 'Limit=5: 7 hidden');
+  CheckEqualsInt(10, TopCount, 'Threshold=10: 20 units capped to 10');
+  CheckEqualsInt(10, VM.HiddenTopLevelCount, 'Threshold=10: 10 units hidden');
 end;
 
 initialization

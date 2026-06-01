@@ -98,6 +98,7 @@ type
     FOnOpenSource:      TGraphIdEvent;
     FOnCrossDbJump:     TGraphNameEvent;
     FOnViewChanged:     TNotifyEvent;
+    FOnZoomChanged:     TNotifyEvent;
 
     procedure AnimTick(Sender: TObject);
 
@@ -143,6 +144,12 @@ type
 
     procedure FitToWindow;
 
+    { SetZoomLevel: clamps AZoom to [0.02, 20], re-anchors around the
+      control center (world point at center stays fixed), then Invalidate.
+      Fires OnZoomChanged after each change. }
+    procedure SetZoomLevel(AZoom: Double);
+    function  ZoomLevel: Double;
+
     property Zoom: Double read FZoom write FZoom;
 
   published
@@ -174,6 +181,10 @@ type
       Host can use this to refresh UI elements that read VM counts. }
     property OnViewChanged:      TNotifyEvent     read FOnViewChanged
                                                   write FOnViewChanged;
+    { Fired whenever FZoom changes (SetZoomLevel, wheel, FitToWindow).
+      Host uses this to sync a zoom slider. }
+    property OnZoomChanged:      TNotifyEvent     read FOnZoomChanged
+                                                  write FOnZoomChanged;
   end;
 
 implementation
@@ -312,6 +323,7 @@ begin
   begin
     FZoom := 1.0; FOffsetX := 0; FOffsetY := 0;
     Invalidate;
+    if Assigned(FOnZoomChanged) then FOnZoomChanged(Self);
     Exit;
   end;
   MinX :=  1.0E30; MaxX := -1.0E30;
@@ -330,10 +342,31 @@ begin
   ZoomY := (Height - 40) / SpanY;
   FZoom := Min(ZoomX, ZoomY);
   if FZoom > 2.0  then FZoom := 2.0;
-  if FZoom < 0.05 then FZoom := 0.05;
+  if FZoom < 0.02 then FZoom := 0.02;
   FOffsetX := (MinX + MaxX) / 2;
   FOffsetY := (MinY + MaxY) / 2;
   Invalidate;
+  if Assigned(FOnZoomChanged) then FOnZoomChanged(Self);
+end;
+
+{ ---------------------------------------------------------------------------- }
+
+procedure TDragLintGraphControl.SetZoomLevel(AZoom: Double);
+begin
+  { Clamp }
+  if AZoom < 0.02 then AZoom := 0.02;
+  if AZoom > 20.0 then AZoom := 20.0;
+  if AZoom = FZoom then Exit;
+  { Center-anchored zoom: FOffsetX/Y are the world point at screen center, so
+    changing only FZoom keeps that world point fixed -- no offset adjustment needed. }
+  FZoom := AZoom;
+  Invalidate;
+  if Assigned(FOnZoomChanged) then FOnZoomChanged(Self);
+end;
+
+function TDragLintGraphControl.ZoomLevel: Double;
+begin
+  Result := FZoom;
 end;
 
 { ---------------------------------------------------------------------------- }
@@ -613,12 +646,9 @@ begin
       Canvas.TextOut(P.X + R + 1, P.Y - R, Badge);
     end;
 
-    { Label }
-    if FZoom >= 0.6 then
+    { Label: always drawn for the selected node; zoom-gated for others. }
+    if (FZoom >= 0.6) or (N.Id = SelId) then
     begin
-      Canvas.Brush.Style := bsClear;
-      Canvas.Font.Color  := CL_LABEL;
-      Canvas.Font.Size   := 8;
       S := N.Label_;
       if S = '' then S := N.Id;
       if PN.Collapsed then
@@ -626,7 +656,29 @@ begin
         DescN := FVM.Data.DescendantCount(PN.NodeIdx);
         S := S + ' (+' + IntToStr(DescN) + ')';
       end;
-      Canvas.TextOut(P.X - Canvas.TextWidth(S) div 2, P.Y + R + 2, S);
+      if (N.Id = SelId) and (FZoom < 0.6) then
+      begin
+        { Selected node at low zoom: draw a readable background behind label }
+        Canvas.Font.Size  := 8;
+        Canvas.Font.Color := CL_LABEL;
+        Canvas.Brush.Color := TColor($00303060);
+        Canvas.Brush.Style := bsSolid;
+        Canvas.Pen.Color   := CL_SEL_BORDER;
+        Canvas.Pen.Width   := 1;
+        Canvas.Pen.Style   := psSolid;
+        Canvas.Rectangle(
+          P.X - Canvas.TextWidth(S) div 2 - 2, P.Y + R + 1,
+          P.X + Canvas.TextWidth(S) div 2 + 2, P.Y + R + Canvas.TextHeight(S) + 3);
+        Canvas.Brush.Style := bsClear;
+        Canvas.TextOut(P.X - Canvas.TextWidth(S) div 2, P.Y + R + 2, S);
+      end
+      else
+      begin
+        Canvas.Brush.Style := bsClear;
+        Canvas.Font.Color  := CL_LABEL;
+        Canvas.Font.Size   := 8;
+        Canvas.TextOut(P.X - Canvas.TextWidth(S) div 2, P.Y + R + 2, S);
+      end;
     end;
   end;
 end;
@@ -876,13 +928,14 @@ begin
   MouseWorld := ScreenToWorld(Local.X, Local.Y);
   ZoomMul := IfThen(WheelDelta > 0, 1.15, 1.0 / 1.15);
   NewZoom := FZoom * ZoomMul;
-  if NewZoom < 0.05 then NewZoom := 0.05;
+  if NewZoom < 0.02 then NewZoom := 0.02;
   if NewZoom > 20.0 then NewZoom := 20.0;
   FZoom := NewZoom;
   FOffsetX := MouseWorld.X - (Local.X - Width  / 2) / FZoom;
   FOffsetY := MouseWorld.Y - (Local.Y - Height / 2) / FZoom;
   { Zoom does NOT invalidate the projection cache -- topology unchanged. }
   Invalidate;
+  if Assigned(FOnZoomChanged) then FOnZoomChanged(Self);
 end;
 
 end.

@@ -81,13 +81,20 @@ type
     procedure SetOnStoreChanged(AValue: TGraphVMNotify);
     { Top-level cap: limits the number of visible direct children of the
       project root to the top-N by descendant count (largest first).
-      FShowAllTopLevel and FTopLevelLimit are view preferences; they are NOT
-      reset on Reload/source change so the user's preference survives store
-      switches.  FHiddenTopLevelCount is updated each time Projection runs. }
+      FShowAllTopLevel, FTopLevelLimit, and FTopLevelCapThreshold are view
+      preferences; they are NOT reset on Reload/source change so the user's
+      preference survives store switches.  FHiddenTopLevelCount is updated
+      each time Projection runs.
+      Adaptive rule: cap is applied only when TopLevel.Count >
+      FTopLevelCapThreshold (default 25).  When applied, keep FTopLevelLimit
+      (10) units and hide the rest.  So with defaults: <=25 units -> all
+      shown; >25 units -> show 10, rest hidden. }
     procedure SetShowAllTopLevel(AValue: Boolean);
     function  ShowAllTopLevel: Boolean;
     procedure SetTopLevelLimit(AValue: Integer);
     function  TopLevelLimit: Integer;
+    procedure SetTopLevelCapThreshold(AValue: Integer);
+    function  TopLevelCapThreshold: Integer;
     function  HiddenTopLevelCount: Integer;
   end;
 
@@ -107,9 +114,10 @@ type
     FNavStack:    TStack<TNavEntry>;
     FOnStoreChanged: TGraphVMNotify;
     FRestoring:   Boolean;
-    FShowAllTopLevel:    Boolean;
-    FTopLevelLimit:      Integer;
-    FHiddenTopLevelCount: Integer;
+    FShowAllTopLevel:       Boolean;
+    FTopLevelLimit:         Integer;
+    FTopLevelCapThreshold:  Integer;
+    FHiddenTopLevelCount:   Integer;
     procedure DoChanged;
     procedure DoSelectionChanged;
     procedure DoStoreChanged;
@@ -161,6 +169,8 @@ type
     function  ShowAllTopLevel: Boolean;
     procedure SetTopLevelLimit(AValue: Integer);
     function  TopLevelLimit: Integer;
+    procedure SetTopLevelCapThreshold(AValue: Integer);
+    function  TopLevelCapThreshold: Integer;
     function  HiddenTopLevelCount: Integer;
   end;
 
@@ -180,6 +190,7 @@ begin
   FRestoring := False;
   FShowAllTopLevel := False;
   FTopLevelLimit := 10;
+  FTopLevelCapThreshold := 25;
   FHiddenTopLevelCount := 0;
 end;
 
@@ -380,7 +391,7 @@ begin
           if FData.ParentIndexOf(Nodes[I].NodeIdx) = ProjRootIdx then
             TopLevel.Add(Nodes[I].NodeIdx);
 
-        if (not FShowAllTopLevel) and (TopLevel.Count > FTopLevelLimit) then
+        if (not FShowAllTopLevel) and (TopLevel.Count > FTopLevelCapThreshold) then
         begin
           { Sort TopLevel by DescendantCount DESC, tie-break by index ASC
             using a simple bubble sort (counts small in unit tests; this is
@@ -780,6 +791,21 @@ end;
 function TGraphViewModel.TopLevelLimit: Integer;
 begin
   Result := FTopLevelLimit;
+end;
+
+procedure TGraphViewModel.SetTopLevelCapThreshold(AValue: Integer);
+begin
+  if AValue < 1 then AValue := 1;
+  if FTopLevelCapThreshold <> AValue then
+  begin
+    FTopLevelCapThreshold := AValue;
+    DoChanged;
+  end;
+end;
+
+function TGraphViewModel.TopLevelCapThreshold: Integer;
+begin
+  Result := FTopLevelCapThreshold;
 end;
 
 function TGraphViewModel.HiddenTopLevelCount: Integer;
