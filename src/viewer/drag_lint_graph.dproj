@@ -60,6 +60,7 @@
         <DCCReference Include="..\control\DragLint.Graph.Source.pas"/>
         <DCCReference Include="..\control\DragLint.Graph.ViewModel.pas"/>
         <DCCReference Include="..\control\DragLint.Graph.Source.Db.pas"/>
+        <DCCReference Include="..\control\DragLint.Graph.OpenSourceClient.pas"/>
         <DCCReference Include="..\control\DragLint.Graph.Control.pas"/>
         <DCCReference Include="MainForm.pas"/>
         <BuildConfiguration Include="Base">

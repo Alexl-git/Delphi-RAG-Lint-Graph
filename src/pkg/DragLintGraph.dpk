@@ -34,6 +34,7 @@ contains
   DragLint.Graph.ViewModel in '..\control\DragLint.Graph.ViewModel.pas',
   DragLint.Graph.Style in '..\control\DragLint.Graph.Style.pas',
   DragLint.Graph.Layout in '..\control\DragLint.Graph.Layout.pas',
+  DragLint.Graph.OpenSourceClient in '..\control\DragLint.Graph.OpenSourceClient.pas',
   DragLint.Graph.Control in '..\control\DragLint.Graph.Control.pas';
 
 end.

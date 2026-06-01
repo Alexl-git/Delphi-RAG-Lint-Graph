@@ -14,7 +14,8 @@ uses
   DragLint.Graph.Source,
   DragLint.Graph.Source.Db,
   DragLint.Graph.ViewModel,
-  DragLint.Graph.Control;
+  DragLint.Graph.Control,
+  DragLint.Graph.OpenSourceClient;
 
 const
   WM_LOADGRAPH = WM_USER + 100;
@@ -209,7 +210,10 @@ begin
   if FVM.Data.NodeCount = 0 then
     FStatus.SimpleText := 'Pass --db <drag-lint.sqlite> to load a graph.'
   else
-    FStatus.SimpleText := Format('Loaded %s: %d nodes',
+    FStatus.SimpleText := Format(
+      'Loaded %s: %d nodes  |  Click a unit/class to expand  -  ' +
+      'click a method to open source  -  Shift+click to focus  -  ' +
+      'double-click to drill in  -  Backspace = back',
       [ExtractFileName(FDbPaths[0]), FVM.Data.NodeCount]);
 
   { Force a projection pass so FHiddenTopLevelCount is current before
@@ -260,12 +264,9 @@ var
   Doc:  TGraphDoc;
   Info: string;
 begin
+  { Fires for every node click (the control's primary action -- expand or
+    open-source -- runs after this and may overwrite the status text). }
   if A.Node = nil then Exit;
-  if A.Ctrl and Assigned(FGraph.OnOpenSource) then
-  begin
-    { Ctrl+click is already routed to OnOpenSource by the control }
-    Exit;
-  end;
   Info := 'Selected: ' + A.Node.Id;
   if A.Node.FilePath <> '' then
     Info := Info + Format('  (%s:%d)', [ExtractFileName(A.Node.FilePath), A.Node.Line]);
@@ -281,13 +282,22 @@ var
   L: Integer;
 begin
   if FVM = nil then Exit;
-  if FVM.LocateSymbol(AId, F, L) and (F <> '') then
+  if not (FVM.LocateSymbol(AId, F, L) and (F <> '')) then
+  begin
+    FStatus.SimpleText := 'Source not found for: ' + AId;
+    Exit;
+  end;
+
+  { Prefer the running Delphi IDE via the drag-lint plugin's named pipe
+    (line-precise jump).  If no plugin is listening (standalone use),
+    fall back to the OS file association so the file still opens. }
+  if SendOpenSource(F, L) then
+    FStatus.SimpleText := Format('Opened in IDE: %s:%d', [F, L])
+  else
   begin
     ShellExecute(0, 'open', PChar(F), nil, nil, SW_SHOWNORMAL);
-    FStatus.SimpleText := 'Opened: ' + F;
-  end
-  else
-    FStatus.SimpleText := 'Source not found for: ' + AId;
+    FStatus.SimpleText := Format('Opened: %s  (line %d -- no IDE plugin listening)', [F, L]);
+  end;
 end;
 
 procedure TfrmMain.GraphCrossDbJump(Sender: TObject; const AName: string);

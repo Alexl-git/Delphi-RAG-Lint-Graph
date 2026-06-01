@@ -20,7 +20,9 @@ uses
   Test.Graph.Source.Db in 'Test.Graph.Source.Db.pas',
   DragLint.Graph.Style in '..\..\src\control\DragLint.Graph.Style.pas',
   Test.Graph.Style in 'Test.Graph.Style.pas',
-  Test.Db.Perf in 'Test.Db.Perf.pas';
+  Test.Db.Perf in 'Test.Db.Perf.pas',
+  DragLint.Graph.OpenSourceClient in '..\..\src\control\DragLint.Graph.OpenSourceClient.pas',
+  Test.Graph.OpenSource in 'Test.Graph.OpenSource.pas';
 
 begin
   WriteLn('drag-lint-graph console tests');

@@ -51,6 +51,25 @@ approach, which was declined in favour of a native VCL canvas solution.
 projected `TGraphData` from the ViewModel; no business logic lives here.  The
 `Style` object controls colours, node shapes, edge colours by section/kind.
 
+#### Interaction
+
+| Gesture | Action |
+|---|---|
+| Left-click a **container** (Project/Unit/Class/Record) | expand / collapse it (`ExpandOnSingleClick`, default on) |
+| Left-click a **leaf** (method/field/property/sql_column) | open its source (`OnOpenSource`) |
+| `Ctrl`+left-click any node | open source (power override) |
+| `Shift`+left-click | focus that node's 1-hop neighborhood |
+| Double-click | navigate into (expand ancestors + select) |
+| Drag empty space | pan; mouse-wheel | zoom |
+| `F` | focus selected; `Esc` | clear focus, then collapse "Show all" back to high-level |
+| `Backspace` | navigate back (cross-DB / drill stack) |
+
+"Open source" is delegated to the host via `OnOpenSource`. The demo viewer
+hands the `(file, line)` to the **running** Delphi IDE through the drag-lint
+plugin over a named pipe (`DragLint.Graph.OpenSourceClient`), falling back to
+the OS file association when no plugin is listening. See
+`docs/ipc-open-source-contract.md`.
+
 ### Dependency-free core
 
 The units in `src/control` that deal with Types, Source (fake), ViewModel,
@@ -81,10 +100,11 @@ so the user can navigate back.  Repeat `--db` flags open multiple stores.
 ```
 src/
   control/         TDragLintGraphControl + supporting units
-                   (Types, Source, Source.Db, ViewModel, Style, Layout, Control)
+                   (Types, Source, Source.Db, ViewModel, Style, Layout,
+                    OpenSourceClient, Control)
   viewer/          drag_lint_graph.dpr -- demo host EXE
 tests/
-  console/         Headless unit test suite (32 tests, no GUI required)
+  console/         Headless unit test suite (41 tests, no GUI required)
   autotest/        GUI smoke test -- builds and launches the viewer
 build/
   build_viewer.bat Builds drag_lint_graph.exe (Win32 Debug)
@@ -105,21 +125,20 @@ build\build_viewer.bat
 
 Produces `bin\Win32\drag_lint_graph.exe`.
 
-**All-in-one (once P5 Task 3 packaging lands):**
+**All-in-one:**
 
 ```
 build\build_all.bat
 ```
 
-Will build runtime BPL + DB BPL + design-time BPL + viewer EXE, then run both
-test gates.  `build_all.bat` is added in P5 Task 3; use `build_viewer.bat`
-until then.
+Builds runtime BPL + DB BPL + design-time BPL + viewer EXE, then runs both
+test gates.
 
 ---
 
 ## Test
 
-**Headless unit suite (32 tests, no DB required for most):**
+**Headless unit suite (41 tests, no DB required for most):**
 
 ```
 pwsh tests\console\run.ps1
@@ -161,6 +180,11 @@ Phases P1-P5 implemented:
 - P3 -- DB reader (FireDAC, read-only/immutable, SQL Tier 1 nodes)
 - P4 -- Style + View (TGraphStyle, TDragLintGraphControl canvas renderer)
 - P5 -- Packaging + hardening (immutable open, dead-code cleanup, BPL split)
+
+Live-test findings fixed: **F1-F5** (hover flicker, cross-DB hang, zoom UI,
+node labels, off-screen startup) and **F6-F7** (single-click expand /
+single-click open-source via named pipe to the running IDE). See
+`docs/test-findings-*.md` and `docs/ipc-open-source-contract.md`.
 
 **Deferred (not yet implemented):**
 

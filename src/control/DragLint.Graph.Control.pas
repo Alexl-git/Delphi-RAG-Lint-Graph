@@ -91,6 +91,12 @@ type
 
     { Published settings }
     FShowLegend: Boolean;
+    FExpandOnSingleClick: Boolean;
+
+    { True while a focus-neighborhood is active (Shift+click / 'F').  Tracked
+      locally so Esc can clear focus first, then fall back to resetting the
+      top-level cap -- without widening IGraphViewModel. }
+    FFocusActive: Boolean;
 
     FOnNodeClick:       TGraphNodeEvent;
     FOnNodeHover:       TGraphHoverEvent;
@@ -165,6 +171,13 @@ type
     property TabStop default True;
     property Visible;
     property ShowLegend: Boolean read FShowLegend write FShowLegend default True;
+    { When True (default), a plain left-click on a node that has children
+      toggles its collapsed state (finding F6: "click a unit, see its
+      methods").  Leaf nodes instead raise OnOpenSource on a plain click
+      (finding F7).  Set False to restore select-only single-click. }
+    property ExpandOnSingleClick: Boolean read FExpandOnSingleClick
+                                          write FExpandOnSingleClick
+                                          default True;
 
     property OnClick;
     property OnNodeClick:        TGraphNodeEvent  read FOnNodeClick
@@ -219,6 +232,8 @@ begin
   FOffsetX := 0;
   FOffsetY := 0;
   FShowLegend := True;
+  FExpandOnSingleClick := True;
+  FFocusActive := False;
   FProjValid := False;
 
   FAnimTimer := TTimer.Create(Self);
@@ -795,6 +810,7 @@ var
   PE:      TProjEdge;
   NB:      PGraphNode;
   Args:    TGraphNodeEventArgs;
+  HasChildren: Boolean;
 begin
   inherited;
   if Button <> mbLeft then Exit;
@@ -807,14 +823,18 @@ begin
   if NIdx >= 0 then
   begin
     N := FVM.Data.NodeAt(Proj.Nodes[NIdx].NodeIdx);
+    HasChildren := Length(FVM.Data.ChildrenOf(Proj.Nodes[NIdx].NodeIdx)) > 0;
+
     FVM.SelectNode(N.Id);
     { Selection changes the border color but not topology: Invalidate only,
       do NOT invalidate the cached projection. }
     Invalidate;
     if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
-    if (ssCtrl in Shift) and Assigned(FOnOpenSource) then
-      FOnOpenSource(Self, N.Id)
-    else if Assigned(FOnNodeClick) then
+
+    { Host hook (status bar / custom handling) fires first so that the
+      primary action below -- which may set its own status (e.g. "Opened:")
+      -- has the last word. }
+    if Assigned(FOnNodeClick) then
     begin
       Args.Node  := N;
       Args.Ctrl  := ssCtrl  in Shift;
@@ -822,6 +842,23 @@ begin
       Args.Alt   := ssAlt   in Shift;
       FOnNodeClick(Self, Args);
     end;
+
+    { Primary single-click action.  Modifiers take precedence; plain click
+      is the discoverable path (F6/F7):
+        Ctrl  -> open source, on ANY node (power override)
+        Shift -> focus this node's neighborhood (1 hop)
+        plain -> container expands/collapses (F6); leaf opens source (F7) }
+    if (ssCtrl in Shift) and Assigned(FOnOpenSource) then
+      FOnOpenSource(Self, N.Id)
+    else if ssShift in Shift then
+    begin
+      FVM.SetFocus(N.Id, 1);
+      FFocusActive := True;
+    end
+    else if FExpandOnSingleClick and HasChildren then
+      FVM.ToggleCollapse(N.Id)
+    else if (not HasChildren) and Assigned(FOnOpenSource) then
+      FOnOpenSource(Self, N.Id);
     Exit;
   end;
 
@@ -883,10 +920,11 @@ begin
   NIdx := HitTestProjNode(MP.X, MP.Y, Proj);
   if NIdx < 0 then Exit;
   N := FVM.Data.NodeAt(Proj.Nodes[NIdx].NodeIdx);
-  if Length(FVM.Data.ChildrenOf(Proj.Nodes[NIdx].NodeIdx)) > 0 then
-    FVM.ToggleCollapse(N.Id)
-  else
-    FVM.NavigateTo(N.Id);
+  { Single-click now owns expand/collapse (F6), so double-click is the deeper
+    "navigate into" gesture: expand ancestors + this node and select it.
+    NavigateTo forces-expanded (not toggle), so the preceding single-click's
+    MouseDown toggle never produces a visible flip-flop. }
+  FVM.NavigateTo(N.Id);
 end;
 
 procedure TDragLintGraphControl.KeyDown(var Key: Word; Shift: TShiftState);
@@ -899,12 +937,26 @@ begin
     VK_F:
       begin
         if FVM.SelectedId <> '' then
+        begin
           FVM.SetFocus(FVM.SelectedId, 1);
+          FFocusActive := True;
+        end;
         Key := 0;
       end;
     VK_ESCAPE:
       begin
-        FVM.ClearFocus;
+        { Esc unwinds one level at a time: first clear an active focus, then
+          (if a top-level cap was expanded via "Show all") collapse back to
+          the high-level view -- closing the loop the user opened (F6 note). }
+        if FFocusActive then
+        begin
+          FVM.ClearFocus;
+          FFocusActive := False;
+        end
+        else if FVM.ShowAllTopLevel then
+          FVM.SetShowAllTopLevel(False)
+        else
+          FVM.ClearFocus;
         Key := 0;
       end;
     VK_BACK:
