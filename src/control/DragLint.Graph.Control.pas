@@ -76,6 +76,16 @@ type
   TGraphOpenSourceEvent = procedure(Sender: TObject;
                                     ANode: PGraphNode) of object;
 
+  { Geometry of a drawn UML class-box, captured each paint so a click can be
+    mapped to the title (-> the type) or a member row (-> that member). }
+  TUmlBoxHit = record
+    NodeIdx: Integer;        { the class/interface/record node }
+    Box:     TRect;          { full box bounds (screen px) }
+    RowTop:  Integer;        { Y of the first member row }
+    RowH:    Integer;        { row height }
+    Members: TArray<Integer>;{ child node indices, in row order (capped) }
+  end;
+
   TDragLintGraphControl = class(TCustomControl)
   strict private
     FVM:     IGraphViewModel;
@@ -101,6 +111,9 @@ type
       lets newly revealed children seed near their parent.  Cleared when the
       store reloads (node indices are only stable within one store). }
     FPlaced: TDictionary<Integer, Boolean>;
+
+    { UML class-box geometry from the last paint, for box/row hit-testing. }
+    FUmlBoxes: TArray<TUmlBoxHit>;
 
     { Optional progressive relayout timer (Phase-0 proven) }
     FAnimTimer:   TTimer;
@@ -141,6 +154,9 @@ type
                               const AProj: TGraphProjection): Integer;
     function  HitTestProjEdge(SX, SY: Integer;
                               const AProj: TGraphProjection): Integer;
+    { If (SX,SY) falls in a drawn UML class-box, act on it (member row -> open
+      that member; title -> select/open the type) and return True. }
+    function  HandleUmlBoxClick(SX, SY: Integer): Boolean;
 
     { Returns the cached projection, rebuilding it if necessary. }
     function  CurrentProjection: TGraphProjection;
@@ -633,6 +649,49 @@ end;
 
 { ---------------------------------------------------------------------------- }
 
+function TDragLintGraphControl.HandleUmlBoxClick(SX, SY: Integer): Boolean;
+var
+  I, RowIdx: Integer;
+  HB: TUmlBoxHit;
+  TypeNode, MemberNode: PGraphNode;
+begin
+  Result := False;
+  if FVM = nil then Exit;
+  { last-drawn first, so a box on top wins }
+  for I := High(FUmlBoxes) downto 0 do
+  begin
+    HB := FUmlBoxes[I];
+    if (SX < HB.Box.Left) or (SX >= HB.Box.Right) or
+       (SY < HB.Box.Top) or (SY >= HB.Box.Bottom) then
+      Continue;
+
+    TypeNode := FVM.Data.NodeAt(HB.NodeIdx);
+    FVM.SelectNode(TypeNode.Id);
+
+    { member row -> open that member }
+    if (SY >= HB.RowTop) and (HB.RowH > 0) then
+    begin
+      RowIdx := (SY - HB.RowTop) div HB.RowH;
+      if (RowIdx >= 0) and (RowIdx < Length(HB.Members)) then
+      begin
+        MemberNode := FVM.Data.NodeAt(HB.Members[RowIdx]);
+        if Assigned(FOnOpenSource) then
+          FOnOpenSource(Self, MemberNode);
+        Invalidate;
+        if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+        Exit(True);
+      end;
+    end;
+
+    { title bar (or empty area) -> open the type itself }
+    if Assigned(FOnOpenSource) then
+      FOnOpenSource(Self, TypeNode);
+    Invalidate;
+    if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+    Exit(True);
+  end;
+end;
+
 procedure TDragLintGraphControl.DrawArrowHead(PA, PB: TPoint);
 var
   DX, DY, Len: Double;
@@ -816,6 +875,17 @@ begin
     Canvas.Font.Color := TColor($00A0A0A0);
     Canvas.TextOut(BoxL + PAD, Y, '... +' + IntToStr(Extra) + ' more');
   end;
+
+  { record geometry so MouseDown can map a click to the title or a member row }
+  var Hit: TUmlBoxHit;
+  Hit.NodeIdx := ANodeIdx;
+  Hit.Box     := Rect(BoxL, BoxT, BoxL + W, BoxT + H);
+  Hit.RowTop  := BoxT + TitleH + 1;
+  Hit.RowH    := RowH;
+  SetLength(Hit.Members, Shown);
+  for I := 0 to Shown - 1 do
+    Hit.Members[I] := Children[I];
+  FUmlBoxes := FUmlBoxes + [Hit];
 end;
 
 procedure TDragLintGraphControl.DrawNodes(const AProj: TGraphProjection);
@@ -842,6 +912,7 @@ begin
   if FVM = nil then Exit;
   SelId := FVM.SelectedId;
   TextH := Canvas.TextHeight('A');
+  SetLength(FUmlBoxes, 0);   { rebuilt below as UML boxes are drawn }
 
   for I := 0 to High(AProj.Nodes) do
   begin
@@ -1097,6 +1168,10 @@ begin
   SetFocus;
   if FVM = nil then Exit;
 
+  { UML class-boxes cover a larger area than the node circle, so test them
+    first: a member row opens that member, the title opens the type. }
+  if HandleUmlBoxClick(X, Y) then Exit;
+
   { Use cached projection for hit-testing; no topology change here. }
   Proj := CurrentProjection;
   NIdx := HitTestProjNode(X, Y, Proj);
@@ -1154,11 +1229,24 @@ begin
   if EIdx >= 0 then
   begin
     PE := Proj.Edges[EIdx];
-    NB := FVM.Data.NodeAt(PE.TargetIdx);
+    { Walk along the link: select the endpoint that is NOT already selected, so
+      after clicking O1 you can click its links to hop to each connected object.
+      With no relevant selection, fall back to the target (the arrow head). }
+    if FVM.SelectedId = FVM.Data.NodeAt(PE.SourceIdx).Id then
+      NB := FVM.Data.NodeAt(PE.TargetIdx)
+    else if FVM.SelectedId = FVM.Data.NodeAt(PE.TargetIdx).Id then
+      NB := FVM.Data.NodeAt(PE.SourceIdx)
+    else
+      NB := FVM.Data.NodeAt(PE.TargetIdx);
+
     if NB.IsExternal and Assigned(FOnCrossDbJump) then
       FOnCrossDbJump(Self, NB.Label_)
     else
-      FVM.NavigateTo(NB.Id);
+    begin
+      FVM.SelectNode(NB.Id);
+      Invalidate;
+      if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+    end;
     Exit;
   end;
 
