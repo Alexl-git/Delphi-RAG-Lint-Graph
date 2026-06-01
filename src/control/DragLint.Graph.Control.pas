@@ -1140,7 +1140,7 @@ begin
       the overview stays fast and uncluttered.  Members are read from
       TGraphData, so they are never also drawn as separate nodes. }
     if (N.Kind in [nkClass, nkInterface, nkRecord]) and
-       ((FZoom >= 0.6) or (N.Id = SelId)) then
+       ((FZoom >= 0.4) or (N.Id = SelId)) then
     begin
       DrawUmlTypeBox(N, PN.NodeIdx, P, N.Id = SelId);
       Continue;
