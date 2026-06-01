@@ -302,7 +302,14 @@ begin
       N.ParentIdx := SrcIdx;
   end;
 
-  { 3. project-root synthesis: parent rootless units under a single nkProject }
+  { 3. project-root synthesis: parent EVERY rootless node under a single
+    nkProject.  Originally only rootless units were adopted, which left
+    orphaned non-unit symbols (their parent unit unresolved, or detached by the
+    MaxNodes truncation) as free top-level roots.  On a real index that is
+    thousands of nodes the top-level cap never sees (it only governs @project's
+    children), so the initial view stayed huge (finding F8).  Adopting all
+    rootless nodes makes @project the single forest root and lets the cap bound
+    the whole visible top level. }
   ProjectIdx := -1;
   for I := 0 to FNodes.Count - 1 do
     if NodeAt(I).Kind = nkProject then
@@ -316,7 +323,7 @@ begin
     for I := 0 to FNodes.Count - 1 do
     begin
       N := NodeAt(I);
-      if (N.Kind = nkUnit) and (N.ParentIdx < 0) then
+      if (N.ParentIdx < 0) and (N.Kind <> nkProject) then
         RootlessUnits.Add(I);
     end;
 

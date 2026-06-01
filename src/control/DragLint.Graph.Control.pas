@@ -13,10 +13,15 @@ unit DragLint.Graph.Control;
        sy = (Y - FOffsetY) * FZoom + ClientHeight / 2
      Pan = mutating FOffsetX/Y. Zoom = mutating FZoom around mouse anchor.
 
-   Simplifications documented:
-     * Full-store force-directed layout runs once on Bind/StoreChanged.
-       Only the visible projection nodes are drawn; visible-only relayout
-       is deferred (LOD phase).
+   Layout (finding F8 fix):
+     * The force-directed layout runs over only the *visible* projection
+       nodes (collapse-resolved), not the whole indexed tree.  On Bind/
+       StoreChanged the store opens collapsed to the top level, so the first
+       layout is a handful of unit bubbles.  Expanding a node seeds its newly
+       revealed children (near the parent) and re-settles just the visible set
+       -- O(V^2) in the visible count, never O(N^2) over the full store.
+       A node keeps its world position when collapsed and revealed again
+       (placement tracked in FPlaced by node index).
      * Cross-DB edges are not drawn within a single-store graph; external-
        node click raises OnCrossDbJump for the host.
      * Diamond/hexagon/cylinder/tag/triangle shapes fall back to a labelled
@@ -40,7 +45,7 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Types, System.Math,
-  System.UITypes,
+  System.UITypes, System.Generics.Collections,
   Vcl.Controls, Vcl.Graphics, Vcl.Forms, Vcl.ExtCtrls,
   Winapi.Windows, Winapi.Messages,
   DragLint.Graph.Types,
@@ -86,6 +91,12 @@ type
     FProjection: TGraphProjection;
     FProjValid:  Boolean;
 
+    { Layout placement tracking (finding F8): node indices into FVM.Data that
+      already have a world position.  Lets a revealed node keep its place and
+      lets newly revealed children seed near their parent.  Cleared when the
+      store reloads (node indices are only stable within one store). }
+    FPlaced: TDictionary<Integer, Boolean>;
+
     { Optional progressive relayout timer (Phase-0 proven) }
     FAnimTimer:   TTimer;
 
@@ -114,6 +125,10 @@ type
 
     { Layout / view helpers }
     procedure Relayout;
+    { Seed any newly revealed visible nodes and settle the visible set.
+      AForceAll re-runs the full settle (Bind/StoreChanged); otherwise it is a
+      cheap incremental pass that only does work when new nodes appeared. }
+    procedure EnsureLayout(AForceAll: Boolean);
 
     function  WorldToScreen(WX, WY: Double): TPoint;
     function  ScreenToWorld(SX, SY: Integer): TPointF;
@@ -227,6 +242,7 @@ begin
 
   FVM     := nil;
   FLayout := TGraphLayout.Create;
+  FPlaced := TDictionary<Integer, Boolean>.Create;
 
   FZoom    := 1.0;
   FOffsetX := 0;
@@ -246,6 +262,7 @@ destructor TDragLintGraphControl.Destroy;
 begin
   FAnimTimer.Free;
   FLayout.Free;
+  FPlaced.Free;
   inherited;
 end;
 
@@ -255,8 +272,16 @@ procedure TDragLintGraphControl.Bind(const AVM: IGraphViewModel);
 begin
   FVM := AVM;
   FProjValid := False;
+  FPlaced.Clear;
   if FVM <> nil then
   begin
+    { Present the store collapsed to its top level (finding F8): a fresh bind
+      shows a handful of unit bubbles you drill into, instead of the whole
+      expanded tree.  Done here (the View) rather than in the ViewModel so the
+      VM's "a fresh load is fully expanded" contract is preserved.  Collapse
+      before subscribing so this setup does not re-enter HandleVMChanged. }
+    FVM.CollapseAll;
+    FProjValid := False;
     FVM.SetOnChanged(HandleVMChanged);
     FVM.SetOnStoreChanged(HandleVMStoreChanged);
     Relayout;
@@ -267,12 +292,19 @@ end;
 procedure TDragLintGraphControl.HandleVMChanged(Sender: TObject);
 begin
   FProjValid := False;
+  { Expand reveals new nodes -> seed + settle them; collapse/select place
+    nothing new and return cheaply, leaving the view where the user left it. }
+  EnsureLayout(False);
   Invalidate;
   if Assigned(FOnViewChanged) then FOnViewChanged(Self);
 end;
 
 procedure TDragLintGraphControl.HandleVMStoreChanged(Sender: TObject);
 begin
+  { New store -> node indices are no longer comparable; drop placement and
+    present the new store collapsed to its top level (finding F8). }
+  FPlaced.Clear;
+  FVM.CollapseAll;
   FProjValid := False;
   Relayout;
   Invalidate;
@@ -290,36 +322,154 @@ begin
 end;
 
 procedure TDragLintGraphControl.Relayout;
+begin
+  { Full (re)settle of the visible set -- used on Bind / store change. }
+  EnsureLayout(True);
+end;
+
+procedure TDragLintGraphControl.EnsureLayout(AForceAll: Boolean);
 const
-  { O(N^2) per iteration: cap at a low step count for very large graphs to
-    avoid a multi-minute hang.  For NodeCount > 2000 we only seed positions
-    (Init) and run a handful of steps so the layout is at least partially
-    placed.  Visible-only relayout is a deferred LOD improvement. }
+  { Repulsion is O(V^2) in the *visible* node count V, so the cap only matters
+    when a single expansion reveals thousands of siblings at once. }
   LAYOUT_LARGE_THRESHOLD = 2000;
   LAYOUT_LARGE_STEPS     = 5;
   LAYOUT_NORMAL_STEPS    = 200;
 var
-  Steps: Integer;
+  Proj: TGraphProjection;
+  VN, EN, ECount, I, NIdx, PIdx, NewCount, Steps: Integer;
+  VisIdx, ESrc, EDst: TArray<Integer>;
+  Vis: TDictionary<Integer, Boolean>;
+  N, P: PGraphNode;
+  W, H: Double;
 begin
   if (FVM = nil) or (FVM.Data = nil) then Exit;
   if FVM.Data.NodeCount = 0 then Exit;
-  FLayout.Init(FVM.Data, Width * 2.0, Height * 2.0);
-  if FVM.Data.NodeCount > LAYOUT_LARGE_THRESHOLD then
+
+  Proj := CurrentProjection;
+  VN := Length(Proj.Nodes);
+  if VN = 0 then
+  begin
+    if AForceAll then FitToWindow;
+    Exit;
+  end;
+
+  W := Width  * 2.0;  if W < 200 then W := 1200;
+  H := Height * 2.0;  if H < 200 then H := 800;
+
+  { Collect visible node indices; seed any node that has no position yet.
+    Deterministic seed so test fixtures and repeated runs reproduce. }
+  RandSeed := VN + 1;
+  SetLength(VisIdx, VN);
+  NewCount := 0;
+  for I := 0 to VN - 1 do
+  begin
+    NIdx := Proj.Nodes[I].NodeIdx;
+    VisIdx[I] := NIdx;
+    N := FVM.Data.NodeAt(NIdx);
+    if N.Radius < 1 then N.Radius := 12;
+    if not FPlaced.ContainsKey(NIdx) then
+    begin
+      PIdx := FVM.Data.ParentIndexOf(NIdx);
+      if (PIdx >= 0) and FPlaced.ContainsKey(PIdx) then
+      begin
+        { fan a revealed child out around its already-placed parent }
+        P := FVM.Data.NodeAt(PIdx);
+        N.X := P.X + (Random - 0.5) * 80.0;
+        N.Y := P.Y + (Random - 0.5) * 80.0;
+      end
+      else
+      begin
+        N.X := Random * W - W / 2;
+        N.Y := Random * H - H / 2;
+      end;
+      N.VX := 0;
+      N.VY := 0;
+      FPlaced.AddOrSetValue(NIdx, True);
+      Inc(NewCount);
+    end;
+  end;
+
+  { Incremental pass with nothing new to place -> positions already valid
+    (e.g. a pure selection or a collapse).  Keep the user's pan/zoom. }
+  if (NewCount = 0) and (not AForceAll) then Exit;
+
+  { Edges fed to the layout = the projection's aggregated relation edges PLUS a
+    synthetic containment spring (parent -> child) for every visible node whose
+    parent is also visible.  The projection drops ekContains, so without this a
+    revealed child has nothing pulling it toward its unit and repulsion scatters
+    it off-screen -- which is why expanding a unit "did nothing" visible.  The
+    spring makes a unit's members cluster around it on expand. }
+  EN := Length(Proj.Edges);
+  Vis := TDictionary<Integer, Boolean>.Create(VN);
+  try
+    for I := 0 to VN - 1 do
+      Vis.AddOrSetValue(VisIdx[I], True);
+
+    SetLength(ESrc, EN + VN);
+    SetLength(EDst, EN + VN);
+    for I := 0 to EN - 1 do
+    begin
+      ESrc[I] := Proj.Edges[I].SourceIdx;
+      EDst[I] := Proj.Edges[I].TargetIdx;
+    end;
+    ECount := EN;
+    for I := 0 to VN - 1 do
+    begin
+      PIdx := FVM.Data.ParentIndexOf(VisIdx[I]);
+      if (PIdx >= 0) and Vis.ContainsKey(PIdx) then
+      begin
+        ESrc[ECount] := PIdx;
+        EDst[ECount] := VisIdx[I];
+        Inc(ECount);
+      end;
+    end;
+    SetLength(ESrc, ECount);
+    SetLength(EDst, ECount);
+  finally
+    Vis.Free;
+  end;
+
+  if VN > LAYOUT_LARGE_THRESHOLD then
     Steps := LAYOUT_LARGE_STEPS
   else
     Steps := LAYOUT_NORMAL_STEPS;
-  FLayout.Step(FVM.Data, Steps);
+
+  FLayout.SetScale(VN, W, H);
+  FLayout.StepVisible(FVM.Data, VisIdx, ESrc, EDst, Steps);
+
+  { We only reach here when the visible set changed (full relayout, or an
+    expand revealed new nodes -- a pure collapse/select returned earlier).
+    Re-fit so the revealed members are actually on screen. }
   FitToWindow;
 end;
 
 procedure TDragLintGraphControl.AnimTick(Sender: TObject);
 var
+  Proj: TGraphProjection;
+  VisIdx, ESrc, EDst: TArray<Integer>;
+  I: Integer;
   Done: Boolean;
 begin
   if FVM = nil then Exit;
-  Done := FLayout.Step(FVM.Data, 1);
-  { layout moved nodes -> world coords changed -> projection must rebuild }
-  FProjValid := False;
+  Proj := CurrentProjection;
+  if Length(Proj.Nodes) = 0 then
+  begin
+    FAnimTimer.Enabled := False;
+    Exit;
+  end;
+  SetLength(VisIdx, Length(Proj.Nodes));
+  for I := 0 to High(Proj.Nodes) do
+    VisIdx[I] := Proj.Nodes[I].NodeIdx;
+  SetLength(ESrc, Length(Proj.Edges));
+  SetLength(EDst, Length(Proj.Edges));
+  for I := 0 to High(Proj.Edges) do
+  begin
+    ESrc[I] := Proj.Edges[I].SourceIdx;
+    EDst[I] := Proj.Edges[I].TargetIdx;
+  end;
+  { Progressive settle of the visible set only.  Positions are read live from
+    TGraphData at paint, so the projection cache stays valid -- no rebuild. }
+  Done := FLayout.StepVisible(FVM.Data, VisIdx, ESrc, EDst, 1);
   Invalidate;
   if Done then FAnimTimer.Enabled := False;
 end;
@@ -328,13 +478,15 @@ end;
 
 procedure TDragLintGraphControl.FitToWindow;
 var
+  Proj: TGraphProjection;
   MinX, MaxX, MinY, MaxY: Double;
   I: Integer;
   N: PGraphNode;
   SpanX, SpanY: Double;
   ZoomX, ZoomY: Double;
 begin
-  if (FVM = nil) or (FVM.Data.NodeCount = 0) then
+  Proj := CurrentProjection;
+  if (FVM = nil) or (Length(Proj.Nodes) = 0) then
   begin
     FZoom := 1.0; FOffsetX := 0; FOffsetY := 0;
     Invalidate;
@@ -343,9 +495,9 @@ begin
   end;
   MinX :=  1.0E30; MaxX := -1.0E30;
   MinY :=  1.0E30; MaxY := -1.0E30;
-  for I := 0 to FVM.Data.NodeCount - 1 do
+  for I := 0 to High(Proj.Nodes) do
   begin
-    N := FVM.Data.NodeAt(I);
+    N := FVM.Data.NodeAt(Proj.Nodes[I].NodeIdx);
     if N.X < MinX then MinX := N.X;
     if N.X > MaxX then MaxX := N.X;
     if N.Y < MinY then MinY := N.Y;
