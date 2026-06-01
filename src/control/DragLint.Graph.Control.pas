@@ -97,10 +97,20 @@ type
     FOffsetY: Double;
 
     { Mouse interaction state }
-    FDragging:    Boolean;
+    FDragging:    Boolean;       { panning the canvas }
     FDragStartPt: TPoint;
     FDragStartOX: Double;
     FDragStartOY: Double;
+
+    { Node drag-or-click state: a left-press on a node defers its click action
+      to MouseUp, so a drag (move the node) and a click (select/open) can be
+      told apart.  A dragged node is pinned (Fixed) so relayout leaves it put. }
+    FDragNodeIdx: Integer;       { node being pressed/dragged, -1 if none }
+    FNodeMoved:   Boolean;       { moved past the click threshold }
+    FGrabDX:      Double;        { node.X - worldUnderCursor.X at press }
+    FGrabDY:      Double;
+    FDownPt:      TPoint;
+    FDownShift:   TShiftState;
 
     { Projection cache -- rebuilt only when VM state changes }
     FProjection: TGraphProjection;
@@ -168,6 +178,12 @@ type
     { Resolve the most specific node under (SX,SY): a UML member row -> that
       member; a UML box title -> the type; otherwise the circle node. -1 if none. }
     function  NodeIdxAt(SX, SY: Integer): Integer;
+    { The draggable node under (SX,SY): a UML box -> its type node (move the
+      whole box), else the circle node. -1 if none. }
+    function  MovableNodeAt(SX, SY: Integer): Integer;
+    { Perform the left-click action at (SX,SY) -- box row/title or circle node.
+      Called from MouseUp when the press did not turn into a drag. }
+    procedure DoLeftClickAt(SX, SY: Integer; AShift: TShiftState);
     { Right-click context menu. }
     procedure ShowContextMenu(SX, SY: Integer);
     procedure CtxOpenSource(Sender: TObject);
@@ -300,6 +316,8 @@ begin
   FAnimTimer.Enabled  := False;
   FAnimTimer.Interval := 33;   { ~30 fps }
   FAnimTimer.OnTimer  := AnimTick;
+
+  FDragNodeIdx := -1;
 
   { Right-click context menu (built in code so the control is self-contained). }
   FContextNodeIdx := -1;
@@ -763,6 +781,28 @@ begin
     Result := Proj.Nodes[NIdx].NodeIdx;
 end;
 
+function TDragLintGraphControl.MovableNodeAt(SX, SY: Integer): Integer;
+var
+  I, NIdx: Integer;
+  HB: TUmlBoxHit;
+  Proj: TGraphProjection;
+begin
+  Result := -1;
+  if FVM = nil then Exit;
+  { a UML box drags as a whole -> return its type node, not a member row }
+  for I := High(FUmlBoxes) downto 0 do
+  begin
+    HB := FUmlBoxes[I];
+    if (SX >= HB.Box.Left) and (SX < HB.Box.Right) and
+       (SY >= HB.Box.Top) and (SY < HB.Box.Bottom) then
+      Exit(HB.NodeIdx);
+  end;
+  Proj := CurrentProjection;
+  NIdx := HitTestProjNode(SX, SY, Proj);
+  if NIdx >= 0 then
+    Result := Proj.Nodes[NIdx].NodeIdx;
+end;
+
 procedure TDragLintGraphControl.ShowContextMenu(SX, SY: Integer);
 var
   P: TPoint;
@@ -873,14 +913,14 @@ begin
   Len := Sqrt(DX * DX + DY * DY);
   if Len < 2 then Exit;
   UX := DX / Len;  UY := DY / Len;
-  { tip is 8px back from PB }
-  AX := PB.X - Round(UX * 8);
-  AY := PB.Y - Round(UY * 8);
-  { left/right wing 5px perpendicular, 8px back from tip }
-  LX := AX - Round(UX * 8) + Round(UY * 5);
-  LY := AY - Round(UY * 8) - Round(UX * 5);
-  RX := AX - Round(UX * 8) - Round(UY * 5);
-  RY := AY - Round(UY * 8) + Round(UX * 5);
+  { tip is 5px back from PB (smaller, less obtrusive arrowhead) }
+  AX := PB.X - Round(UX * 5);
+  AY := PB.Y - Round(UY * 5);
+  { left/right wing 3px perpendicular, 5px back from tip }
+  LX := AX - Round(UX * 5) + Round(UY * 3);
+  LY := AY - Round(UY * 5) - Round(UX * 3);
+  RX := AX - Round(UX * 5) - Round(UY * 3);
+  RY := AY - Round(UY * 5) + Round(UX * 3);
   Pts[0] := Point(AX, AY);
   Pts[1] := Point(LX, LY);
   Pts[2] := Point(RX, RY);
@@ -1338,14 +1378,11 @@ end;
 procedure TDragLintGraphControl.MouseDown(Button: TMouseButton;
   Shift: TShiftState; X, Y: Integer);
 var
-  Proj:    TGraphProjection;
-  NIdx:    Integer;
-  EIdx:    Integer;
-  N:       PGraphNode;
-  PE:      TProjEdge;
-  NB:      PGraphNode;
-  Args:    TGraphNodeEventArgs;
-  HasChildren: Boolean;
+  Proj: TGraphProjection;
+  EIdx: Integer;
+  N:    PGraphNode;
+  PE:   TProjEdge;
+  NB:   PGraphNode;
 begin
   inherited;
   if Button = mbRight then
@@ -1359,63 +1396,24 @@ begin
   SetFocus;
   if FVM = nil then Exit;
 
-  { UML class-boxes cover a larger area than the node circle, so test them
-    first: a member row opens that member, the title opens the type. }
-  if HandleUmlBoxClick(X, Y) then Exit;
-
-  { Use cached projection for hit-testing; no topology change here. }
-  Proj := CurrentProjection;
-  NIdx := HitTestProjNode(X, Y, Proj);
-  if NIdx >= 0 then
+  { Left-press on a node: defer the action to MouseUp so a drag (move the node)
+    and a click (select/open) can be distinguished.  Capture the grab offset so
+    the node tracks the cursor without jumping. }
+  FDragNodeIdx := MovableNodeAt(X, Y);
+  if FDragNodeIdx >= 0 then
   begin
-    N := FVM.Data.NodeAt(Proj.Nodes[NIdx].NodeIdx);
-    HasChildren := Length(FVM.Data.ChildrenOf(Proj.Nodes[NIdx].NodeIdx)) > 0;
-
-    FVM.SelectNode(N.Id);
-    { Selection changes the border color but not topology: Invalidate only,
-      do NOT invalidate the cached projection. }
-    Invalidate;
-    if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
-
-    { Host hook (status bar / custom handling) fires first so that the
-      primary action below -- which may set its own status (e.g. "Opened:")
-      -- has the last word. }
-    if Assigned(FOnNodeClick) then
-    begin
-      Args.Node  := N;
-      Args.Ctrl  := ssCtrl  in Shift;
-      Args.Shift := ssShift in Shift;
-      Args.Alt   := ssAlt   in Shift;
-      FOnNodeClick(Self, Args);
-    end;
-
-    { Primary single-click action.  Modifiers take precedence; plain click
-      is the discoverable path (F6/F7):
-        Ctrl  -> open source, on ANY node (power override)
-        Shift -> focus this node's neighborhood (1 hop)
-        plain -> container expands/collapses (F6); leaf opens source (F7) }
-    if (ssCtrl in Shift) and Assigned(FOnOpenSource) then
-      FOnOpenSource(Self, N)
-    else if ssShift in Shift then
-    begin
-      FVM.SetFocus(N.Id, 1);
-      FFocusActive := True;
-    end
-    else if (N.Kind in [nkClass, nkInterface, nkRecord]) then
-    begin
-      { Types render their members inside a UML box, so a click does not expand
-        to separate member nodes -- it opens the type's source instead. }
-      if Assigned(FOnOpenSource) then
-        FOnOpenSource(Self, N);
-    end
-    else if FExpandOnSingleClick and HasChildren then
-      FVM.ToggleCollapse(N.Id)
-    else if (not HasChildren) and Assigned(FOnOpenSource) then
-      FOnOpenSource(Self, N);
+    N := FVM.Data.NodeAt(FDragNodeIdx);
+    FNodeMoved := False;
+    FDownPt    := Point(X, Y);
+    FDownShift := Shift;
+    var W := ScreenToWorld(X, Y);
+    FGrabDX := N.X - W.X;
+    FGrabDY := N.Y - W.Y;
     Exit;
   end;
 
-  { edge hit-test }
+  { Not on a node: edge walk-select, else begin a canvas pan. }
+  Proj := CurrentProjection;
   EIdx := HitTestProjEdge(X, Y, Proj);
   if EIdx >= 0 then
   begin
@@ -1448,28 +1446,113 @@ begin
   FDragStartOY := FOffsetY;
 end;
 
-{ MouseMove only handles pan.  Hover hit-testing and hover-driven Invalidate
-  have been removed (bug F1): moving the mouse over the canvas causes NO
-  repaint unless a drag (pan) is in progress. }
+{ The left-click action, run from MouseUp when the press was not a drag.
+  Box row -> member, box title -> type, else circle-node click. }
+procedure TDragLintGraphControl.DoLeftClickAt(SX, SY: Integer;
+  AShift: TShiftState);
+var
+  Proj: TGraphProjection;
+  NIdx: Integer;
+  N:    PGraphNode;
+  Args: TGraphNodeEventArgs;
+  HasChildren: Boolean;
+begin
+  if FVM = nil then Exit;
+  if HandleUmlBoxClick(SX, SY) then Exit;
+
+  Proj := CurrentProjection;
+  NIdx := HitTestProjNode(SX, SY, Proj);
+  if NIdx < 0 then Exit;
+
+  N := FVM.Data.NodeAt(Proj.Nodes[NIdx].NodeIdx);
+  HasChildren := Length(FVM.Data.ChildrenOf(Proj.Nodes[NIdx].NodeIdx)) > 0;
+
+  FVM.SelectNode(N.Id);
+  Invalidate;
+  if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+
+  if Assigned(FOnNodeClick) then
+  begin
+    Args.Node  := N;
+    Args.Ctrl  := ssCtrl  in AShift;
+    Args.Shift := ssShift in AShift;
+    Args.Alt   := ssAlt   in AShift;
+    FOnNodeClick(Self, Args);
+  end;
+
+  { Ctrl -> open source; Shift -> focus neighborhood; plain -> type opens
+    source, unit toggles, leaf opens source. }
+  if (ssCtrl in AShift) and Assigned(FOnOpenSource) then
+    FOnOpenSource(Self, N)
+  else if ssShift in AShift then
+  begin
+    FVM.SetFocus(N.Id, 1);
+    FFocusActive := True;
+  end
+  else if (N.Kind in [nkClass, nkInterface, nkRecord]) then
+  begin
+    if Assigned(FOnOpenSource) then
+      FOnOpenSource(Self, N);
+  end
+  else if FExpandOnSingleClick and HasChildren then
+    FVM.ToggleCollapse(N.Id)
+  else if (not HasChildren) and Assigned(FOnOpenSource) then
+    FOnOpenSource(Self, N);
+end;
+
 procedure TDragLintGraphControl.MouseMove(Shift: TShiftState; X, Y: Integer);
+var
+  N: PGraphNode;
+  W: TPointF;
 begin
   inherited;
+  { Node drag in progress (left button held on a node). }
+  if FDragNodeIdx >= 0 then
+  begin
+    if (not FNodeMoved) and
+       (Abs(X - FDownPt.X) + Abs(Y - FDownPt.Y) > 4) then
+    begin
+      FNodeMoved := True;
+      Cursor := crSizeAll;
+    end;
+    if FNodeMoved then
+    begin
+      N := FVM.Data.NodeAt(FDragNodeIdx);
+      W := ScreenToWorld(X, Y);
+      N.X := W.X + FGrabDX;
+      N.Y := W.Y + FGrabDY;
+      N.Fixed := True;          { pin so relayout leaves it where dropped }
+      Invalidate;               { positions are read live; projection unchanged }
+    end;
+    Exit;
+  end;
+
   if FDragging then
   begin
     FOffsetX := FDragStartOX - (X - FDragStartPt.X) / FZoom;
     FOffsetY := FDragStartOY - (Y - FDragStartPt.Y) / FZoom;
-    { Pan does NOT invalidate the projection cache -- topology unchanged. }
     Invalidate;
   end;
-  { No hover hit-test, no Invalidate when not dragging. }
 end;
 
 procedure TDragLintGraphControl.MouseUp(Button: TMouseButton;
   Shift: TShiftState; X, Y: Integer);
 begin
   inherited;
-  if Button = mbLeft then
-    FDragging := False;
+  if Button <> mbLeft then Exit;
+
+  if FDragNodeIdx >= 0 then
+  begin
+    if not FNodeMoved then
+      DoLeftClickAt(X, Y, FDownShift)   { it was a click, not a drag }
+    else
+      Cursor := crDefault;              { finished dragging the node }
+    FDragNodeIdx := -1;
+    FNodeMoved   := False;
+    Exit;
+  end;
+
+  FDragging := False;
 end;
 
 procedure TDragLintGraphControl.DblClick;
