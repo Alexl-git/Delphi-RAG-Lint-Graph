@@ -111,6 +111,7 @@ type
     FGrabDY:      Double;
     FDownPt:      TPoint;
     FDownShift:   TShiftState;
+    FRightMoved:  Boolean;       { right-drag moved past the click threshold }
 
     { Roam + dwell hover: when the button is up, moving freely sets a hand
       cursor over nodes; pausing pops a hint (kind/name/type/doc).  No repaint
@@ -1411,8 +1412,14 @@ begin
   if Button = mbRight then
   begin
     SetFocus;
-    if FVM <> nil then
-      ShowContextMenu(X, Y);
+    if FVM = nil then Exit;
+    { Move mode lives on the RIGHT button only: right-drag pans the canvas; a
+      right-click without dragging opens the context menu (decided in MouseUp). }
+    FDragging    := True;
+    FRightMoved  := False;
+    FDragStartPt := Point(X, Y);
+    FDragStartOX := FOffsetX;
+    FDragStartOY := FOffsetY;
     Exit;
   end;
   if Button <> mbLeft then Exit;
@@ -1462,11 +1469,14 @@ begin
     Exit;
   end;
 
-  { empty space -> begin pan }
-  FDragging    := True;
-  FDragStartPt := Point(X, Y);
-  FDragStartOX := FOffsetX;
-  FDragStartOY := FOffsetY;
+  { Empty space (left): clear the selection.  Panning is right-drag only now,
+    so the left button never moves the canvas. }
+  if FVM.SelectedId <> '' then
+  begin
+    FVM.SelectNode('');
+    Invalidate;
+    if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+  end;
 end;
 
 { The left-click action, run from MouseUp when the press was not a drag.
@@ -1553,8 +1563,15 @@ begin
     Exit;
   end;
 
+  { Right-drag pan (FDragging is only set by a right-button press now). }
   if FDragging then
   begin
+    if (not FRightMoved) and
+       (Abs(X - FDragStartPt.X) + Abs(Y - FDragStartPt.Y) > 4) then
+    begin
+      FRightMoved := True;
+      Cursor := crSizeAll;          { move cursor only while right-dragging }
+    end;
     FOffsetX := FDragStartOX - (X - FDragStartPt.X) / FZoom;
     FOffsetY := FDragStartOY - (Y - FDragStartPt.Y) / FZoom;
     Invalidate;
@@ -1577,11 +1594,20 @@ procedure TDragLintGraphControl.MouseUp(Button: TMouseButton;
   Shift: TShiftState; X, Y: Integer);
 begin
   inherited;
-  if Button <> mbLeft then Exit;
-
-  { Always leave "move mode": the move cursor only lives between MouseDown and
-    MouseUp on a node. }
+  { Always leave move mode on release. }
   Cursor := crDefault;
+
+  if Button = mbRight then
+  begin
+    { A right press that did not turn into a pan is a context-menu click. }
+    if FDragging and (not FRightMoved) then
+      ShowContextMenu(FDragStartPt.X, FDragStartPt.Y);
+    FDragging   := False;
+    FRightMoved := False;
+    Exit;
+  end;
+
+  if Button <> mbLeft then Exit;
 
   if FDragNodeIdx >= 0 then
   begin
