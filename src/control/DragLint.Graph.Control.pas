@@ -972,6 +972,18 @@ begin
     PB  := WorldToScreen(NB.X, NB.Y);
     Sty := EdgeStyleFor(PE.Kind, PE.Section, PE.Aggregated, PE.CrossDb);
 
+    { UML "implements/inherits": a type-use edge between a class/record and an
+      interface is a realization -- draw it distinct (dashed, UML cyan) so you
+      can spot who implements an interface. View-only; no reindex needed. }
+    if (PE.Kind = ekTypeRef) and (not PE.Aggregated) and
+       (((NA.Kind = nkInterface) and (NB.Kind in [nkClass, nkRecord])) or
+        ((NB.Kind = nkInterface) and (NA.Kind in [nkClass, nkRecord]))) then
+    begin
+      Sty.Color := Cardinal($00C0C000);   { cyan-ish, distinct from type refs }
+      Sty.Dash  := edDash;
+      Sty.Arrow := True;
+    end;
+
     Canvas.Pen.Color := TColor(Sty.Color);
     Canvas.Pen.Width := Sty.Width;
     case Sty.Dash of
@@ -1539,17 +1551,16 @@ var
   W: TPointF;
 begin
   inherited;
-  HideHoverHint;   { any movement dismisses the dwell hint }
 
-  { Node drag in progress -- ONLY while the left button is held (FDragNodeIdx is
-    set in MouseDown and cleared in MouseUp). }
+  { Left node-drag -- only while the left button is held. }
   if FDragNodeIdx >= 0 then
   begin
     if (not FNodeMoved) and
        (Abs(X - FDownPt.X) + Abs(Y - FDownPt.Y) > 4) then
     begin
       FNodeMoved := True;
-      Cursor := crSizeAll;          { move cursor only while actually dragging }
+      Cursor := crSizeAll;
+      HideHoverHint;
     end;
     if FNodeMoved then
     begin
@@ -1557,20 +1568,21 @@ begin
       W := ScreenToWorld(X, Y);
       N.X := W.X + FGrabDX;
       N.Y := W.Y + FGrabDY;
-      N.Fixed := True;          { pin so relayout leaves it where dropped }
-      Invalidate;               { positions are read live; projection unchanged }
+      N.Fixed := True;
+      Invalidate;
     end;
     Exit;
   end;
 
-  { Right-drag pan (FDragging is only set by a right-button press now). }
+  { Right-drag pan -- the ONLY thing that puts us in move mode. }
   if FDragging then
   begin
     if (not FRightMoved) and
        (Abs(X - FDragStartPt.X) + Abs(Y - FDragStartPt.Y) > 4) then
     begin
       FRightMoved := True;
-      Cursor := crSizeAll;          { move cursor only while right-dragging }
+      Cursor := crSizeAll;
+      HideHoverHint;
     end;
     FOffsetX := FDragStartOX - (X - FDragStartPt.X) / FZoom;
     FOffsetY := FDragStartOY - (Y - FDragStartPt.Y) / FZoom;
@@ -1578,16 +1590,17 @@ begin
     Exit;
   end;
 
-  { Button up: a free-roaming pointer.  Hand cursor over a node, arrow over
-    empty canvas; arm the dwell timer to pop a hint if the mouse settles.
-    No Invalidate here (that was the bug-F1 repaint storm) -- pure hit-test. }
-  if NodeIdxAt(X, Y) >= 0 then
-    Cursor := crHandPoint
-  else
-    Cursor := crDefault;
-  FHoverPt := Point(X, Y);
-  FHoverTimer.Enabled := False;
-  FHoverTimer.Enabled := True;
+  { Button up = a plain pointer.  Do NOT change the cursor here (no hand, no
+    move) and do NOT repaint -- that toggling was the flicker / "always in move
+    mode" feel.  Only re-arm the dwell hint on real movement (>4px) so a
+    settled mouse pops one hint and a jittering mouse does not flicker it. }
+  if (Abs(X - FHoverPt.X) + Abs(Y - FHoverPt.Y) > 4) then
+  begin
+    HideHoverHint;
+    FHoverPt := Point(X, Y);
+    FHoverTimer.Enabled := False;
+    FHoverTimer.Enabled := True;
+  end;
 end;
 
 procedure TDragLintGraphControl.MouseUp(Button: TMouseButton;
