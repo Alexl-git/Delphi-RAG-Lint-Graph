@@ -1565,8 +1565,13 @@ begin
     if Assigned(FOnOpenSource) then
       FOnOpenSource(Self, N);
   end
-  else if FExpandOnSingleClick and HasChildren then
-    FVM.ToggleCollapse(N.Id)
+  else if HasChildren then
+  begin
+    { Drill INTO a container (unit): the view shows only its contents, with a
+      breadcrumb + Back.  Force a fit-relayout so we "zoom into" the subtree. }
+    FVM.DrillInto(N.Id);
+    Relayout;
+  end
   else if (not HasChildren) and Assigned(FOnOpenSource) then
     FOnOpenSource(Self, N);
 end;

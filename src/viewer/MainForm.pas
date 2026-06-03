@@ -7,8 +7,9 @@ unit MainForm;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.Math,
+  System.SysUtils, System.Classes, System.Math, System.UITypes,
   Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls,
+  Vcl.Graphics,
   Winapi.Windows, Winapi.Messages, Winapi.ShellAPI,
   DragLint.Graph.Types,
   DragLint.Graph.Source,
@@ -28,6 +29,7 @@ type
     FShowAllBtn: TButton;
     FZoomBar:    TTrackBar;
     FFitBtn:     TButton;
+    FCrumbBar:   TPanel;
     FSyncingZoom: Boolean;
     FVM:         IGraphViewModel;
     FCatalog:    IDbCatalog;
@@ -45,6 +47,8 @@ type
     procedure GraphViewChanged(Sender: TObject);
     procedure ShowAllBtnClick(Sender: TObject);
     procedure UpdateShowAllButton;
+    procedure UpdateBreadcrumbs;
+    procedure CrumbClick(Sender: TObject);
     { Zoom slider helpers }
     procedure ZoomBarChange(Sender: TObject);
     procedure FitBtnClick(Sender: TObject);
@@ -88,6 +92,16 @@ begin
   FStatus.Parent := Self;
   FStatus.SimplePanel := True;
   FStatus.SimpleText := 'Loading graph...';
+
+  { Breadcrumb bar across the top -- created first so it sits below the
+    top-right Fit/zoom/show-all controls in z-order. }
+  FCrumbBar := TPanel.Create(Self);
+  FCrumbBar.Parent     := Self;
+  FCrumbBar.Align      := alTop;
+  FCrumbBar.Height     := 26;
+  FCrumbBar.BevelOuter := bvNone;
+  FCrumbBar.Color      := TColor($00383838);
+  FCrumbBar.ParentBackground := False;
 
   { Fit button - anchored top-right, left of zoom bar }
   FFitBtn := TButton.Create(Self);
@@ -222,11 +236,73 @@ begin
     UpdateShowAllButton reads it -- Bind only schedules a paint. }
   FVM.Projection;
   UpdateShowAllButton;
+  UpdateBreadcrumbs;
 end;
 
 procedure TfrmMain.GraphViewChanged(Sender: TObject);
 begin
   UpdateShowAllButton;
+  UpdateBreadcrumbs;
+end;
+
+procedure TfrmMain.CrumbClick(Sender: TObject);
+begin
+  if FVM = nil then Exit;
+  FVM.DrillToDepth((Sender as TButton).Tag);
+  FGraph.FitToWindow;     { zoom to the level we jumped back to }
+end;
+
+procedure TfrmMain.UpdateBreadcrumbs;
+var
+  Path: TArray<string>;
+  I, X, p: Integer;
+  Btn: TButton;
+  Sep: TLabel;
+  Cap, S: string;
+begin
+  if (FVM = nil) or (FCrumbBar = nil) then Exit;
+  while FCrumbBar.ControlCount > 0 do
+    FCrumbBar.Controls[0].Free;
+
+  Path := FVM.DrillPath;
+  X := 6;
+  for I := 0 to Length(Path) do
+  begin
+    if I > 0 then
+    begin
+      Sep := TLabel.Create(FCrumbBar);
+      Sep.Parent := FCrumbBar;
+      Sep.Caption := '>';
+      Sep.Font.Color := clSilver;
+      Sep.Transparent := True;
+      Sep.Left := X;
+      Sep.Top := 6;
+      X := X + Sep.Width + 4;
+    end;
+
+    if I = 0 then
+      Cap := 'Project'
+    else
+    begin
+      S := Path[I - 1];
+      p := LastDelimiter('.', S);
+      if p > 0 then Cap := Copy(S, p + 1, MaxInt) else Cap := S;
+      if Cap = '' then Cap := S;
+    end;
+
+    Btn := TButton.Create(FCrumbBar);
+    Btn.Parent  := FCrumbBar;
+    Btn.Caption := Cap;
+    Btn.Tag     := I;                 { drill depth }
+    Btn.Top     := 2;
+    Btn.Height  := 22;
+    Btn.Left    := X;
+    Btn.Width   := Length(Cap) * 7 + 24;   { estimate; Panel.Canvas is protected }
+    Btn.OnClick := CrumbClick;
+    { the last crumb is where we are now -> not clickable }
+    Btn.Enabled := I < Length(Path);
+    X := X + Btn.Width + 2;
+  end;
 end;
 
 procedure TfrmMain.UpdateShowAllButton;

@@ -42,6 +42,7 @@ type
     FocusId:    string;
     FocusHops:  Integer;
     Isolate:    Boolean;
+    DrillRootId: string;   { containment drill-in root ('' = whole project) }
   end;
 
   TGraphVMNotify = procedure(Sender: TObject) of object;
@@ -72,6 +73,10 @@ type
     function  GetIsolate: Boolean;
     procedure SetIsolate(AValue: Boolean);
     procedure NavigateTo(const AId: string);
+    procedure DrillInto(const AId: string);
+    function  DrillRootId: string;
+    function  DrillPath: TArray<string>;
+    procedure DrillToDepth(ADepth: Integer);
     function  ResolveCrossDb(const AName: string): TCrossDbResolution;
     procedure JumpToCrossDb(const AName: string);
     procedure Back;
@@ -113,6 +118,7 @@ type
     FFocusHops:   Integer;
     FIsolate:     Boolean;
     FNavStack:    TStack<TNavEntry>;
+    FDrillPath:   TList<string>;   { containment drill roots; empty = project }
     FOnStoreChanged: TGraphVMNotify;
     FRestoring:   Boolean;
     FShowAllTopLevel:       Boolean;
@@ -159,6 +165,10 @@ type
     function  GetIsolate: Boolean;
     procedure SetIsolate(AValue: Boolean);
     procedure NavigateTo(const AId: string);
+    procedure DrillInto(const AId: string);
+    function  DrillRootId: string;
+    function  DrillPath: TArray<string>;
+    procedure DrillToDepth(ADepth: Integer);
     function  ResolveCrossDb(const AName: string): TCrossDbResolution;
     procedure JumpToCrossDb(const AName: string);
     procedure Back;
@@ -189,6 +199,7 @@ begin
   FFocusHops := 1;
   FIsolate := False;
   FNavStack := TStack<TNavEntry>.Create;
+  FDrillPath := TList<string>.Create;
   FRestoring := False;
   FShowAllTopLevel := False;
   FTopLevelLimit := 10;
@@ -199,6 +210,7 @@ end;
 destructor TGraphViewModel.Destroy;
 begin
   FNavStack.Free;
+  FDrillPath.Free;
   FCollapsed.Free;
   FData.Free;
   inherited;
@@ -221,6 +233,7 @@ begin
     FSelectedId := '';
     FCollapsed.Clear;
     FFocusId := '';
+    FDrillPath.Clear;
   end;
   FData.Clear;
   if FSource <> nil then
@@ -324,18 +337,37 @@ var
   CapDescArr: TArray<Integer>;
   Tmp: Integer;
   Swapped: Boolean;
+  DrillIdx, Anc: Integer;
+  InDrill: Boolean;
 begin
+  { Containment drill-in: when a drill root is set, show ONLY its subtree. }
+  DrillIdx := -1;
+  if DrillRootId <> '' then
+    DrillIdx := FData.FindNodeIndex(DrillRootId);
+
   Nodes := TList<TProjNode>.Create;
   Edges := TList<TProjEdge>.Create;
   try
     for I := 0 to FData.NodeCount - 1 do
-      if NodeIsVisible(I) then
+    begin
+      if not NodeIsVisible(I) then Continue;
+      if DrillIdx >= 0 then
       begin
-        PN.NodeIdx := I;
-        PN.Collapsed := NodeIsCollapsed(I);
-        PN.Dimmed := False;
-        Nodes.Add(PN);
+        { keep only strict descendants of the drill root }
+        InDrill := False;
+        Anc := FData.ParentIndexOf(I);
+        while Anc >= 0 do
+        begin
+          if Anc = DrillIdx then begin InDrill := True; Break; end;
+          Anc := FData.ParentIndexOf(Anc);
+        end;
+        if not InDrill then Continue;
       end;
+      PN.NodeIdx := I;
+      PN.Collapsed := NodeIsCollapsed(I);
+      PN.Dimmed := False;
+      Nodes.Add(PN);
+    end;
     { edges with merge by (src,dst) pair }
     EdgeKey := TDictionary<string, Integer>.Create;
     try
@@ -383,6 +415,9 @@ begin
       all its currently-visible descendants (they share the same ancestor
       chain) and any edge touching a removed node.
       View preferences FShowAllTopLevel/FTopLevelLimit survive Reload. }
+    if DrillIdx >= 0 then
+    ProjRootIdx := DrillIdx           { drilled in: cap on the drill root's children }
+  else
     ProjRootIdx := FData.FindNodeIndex('@project');
     if ProjRootIdx >= 0 then
     begin
@@ -703,6 +738,40 @@ begin
   ExpandAncestors(AId);
   FCollapsed.Remove(AId);
   FSelectedId := AId;
+  DoChanged;
+  DoSelectionChanged;
+end;
+
+procedure TGraphViewModel.DrillInto(const AId: string);
+begin
+  if AId = '' then Exit;
+  if (FDrillPath.Count > 0) and (FDrillPath.Last = AId) then Exit;
+  FDrillPath.Add(AId);
+  FCollapsed.Remove(AId);     { expand the new root so its members are visible }
+  FSelectedId := AId;
+  DoChanged;
+  DoSelectionChanged;
+end;
+
+function TGraphViewModel.DrillRootId: string;
+begin
+  if FDrillPath.Count > 0 then
+    Result := FDrillPath.Last
+  else
+    Result := '';
+end;
+
+function TGraphViewModel.DrillPath: TArray<string>;
+begin
+  Result := FDrillPath.ToArray;
+end;
+
+procedure TGraphViewModel.DrillToDepth(ADepth: Integer);
+begin
+  if ADepth < 0 then ADepth := 0;
+  if ADepth > FDrillPath.Count then Exit;
+  while FDrillPath.Count > ADepth do
+    FDrillPath.Delete(FDrillPath.Count - 1);
   DoChanged;
   DoSelectionChanged;
 end;
