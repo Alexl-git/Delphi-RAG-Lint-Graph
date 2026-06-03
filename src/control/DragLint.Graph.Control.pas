@@ -1051,6 +1051,8 @@ begin
     Title := '<<interface>> ' + Title
   else if ANode.Kind = nkRecord then
     Title := '<<record>> ' + Title;
+  if ANode.Section = 'implementation' then
+    Title := Title + '  [impl-only]';   { not usable from another unit }
 
   Canvas.Font.Size := 8;
   Canvas.Font.Style := [fsBold];
@@ -1700,6 +1702,10 @@ begin
   Txt := Kind + ': ' + N.Id;
   if N.Signature <> '' then
     Txt := Txt + #13#10 + N.Signature;
+  if N.Section = 'implementation' then
+    Txt := Txt + #13#10 + '(implementation-only - not usable from another unit)'
+  else if N.Section = 'interface' then
+    Txt := Txt + #13#10 + '(interface section)';
   Doc := FVM.DocFor(N.Id);
   if Doc.HasDoc and (Doc.Summary <> '') then
     Txt := Txt + #13#10#13#10 + Doc.Summary;

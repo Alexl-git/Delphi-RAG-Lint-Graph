@@ -19,6 +19,7 @@ interface
 uses
   Winapi.Windows,
   System.SysUtils,
+  System.StrUtils,
   System.Classes,
   System.Generics.Collections,
   System.JSON,
@@ -40,6 +41,7 @@ type
     FConn:            TFDConnection;
     FStoreIndex:      Integer;
     FMaxNodes:        Integer;
+    FSchemaVer:       Integer;   { for optional columns added in later versions }
     FWasTruncated:    Boolean;
     FTotalSymbolCount: Integer;
     procedure Connect(const ADbPath: string);
@@ -196,6 +198,7 @@ begin
       raise EDbSchemaMismatch.CreateFmt(
         'DB schema version %d is too old (need >= 5); run the indexer to upgrade.',
         [Ver]);
+    FSchemaVer := Ver;
   finally
     Q.Free;
   end;
@@ -384,7 +387,8 @@ begin
               become nodes.  No ORDER BY -- raw storage order is fastest. }
             Q.SQL.Text   :=
               'SELECT id, file_id, parent_id, kind, name, qualified_name, ' +
-              '  signature, modifiers, start_line, start_col, end_line ' +
+              '  signature, modifiers, start_line, start_col, end_line' +
+              IfThen(FSchemaVer >= 7, ', section', '') + ' ' +
               'FROM symbols LIMIT :max';
             Q.ParamByName('max').AsInteger := FMaxNodes;
             Q.Open;
@@ -401,6 +405,8 @@ begin
               Node.DbId      := SymId;
               Node.Signature := Q.FieldByName('signature').AsString;
               Node.Modifiers := Q.FieldByName('modifiers').AsString;
+              if Q.FindField('section') <> nil then
+                Node.Section := Q.FieldByName('section').AsString;
               Node.Line      := Q.FieldByName('start_line').AsInteger;
               Node.Col       := Q.FieldByName('start_col').AsInteger;
               Node.Radius    := 12;
