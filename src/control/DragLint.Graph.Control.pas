@@ -111,7 +111,8 @@ type
     FGrabDY:      Double;
     FDownPt:      TPoint;
     FDownShift:   TShiftState;
-    FRightMoved:  Boolean;       { right-drag moved past the click threshold }
+    FRightMoved:  Boolean;       { canvas pan moved past the click threshold }
+    FPanButton:   TMouseButton;  { which button started the active canvas pan }
 
     { Roam + dwell hover: when the button is up, moving freely sets a hand
       cursor over nodes; pausing pops a hint (kind/name/type/doc).  No repaint
@@ -143,6 +144,9 @@ type
     FMiWhereUsed:    TMenuItem;
     FMiGotoIntf:     TMenuItem;
     FMiCenter:       TMenuItem;
+    FMiSep:          TMenuItem;
+    FMiFit:          TMenuItem;
+    FMiBack:         TMenuItem;
     FContextNodeIdx: Integer;
 
     { Optional progressive relayout timer (Phase-0 proven) }
@@ -207,6 +211,17 @@ type
     procedure CtxWhereUsed(Sender: TObject);
     procedure CtxGotoInterface(Sender: TObject);
     procedure CtxCenter(Sender: TObject);
+    procedure CtxFit(Sender: TObject);
+    procedure CtxBack(Sender: TObject);
+    { Go up one level: drill-up if drilled, else un-show-all, else VM Back.
+      Wired to Backspace, the mouse back thumb button, and the canvas menu. }
+    procedure NavigateBack;
+    { After the force pass, gather still-isolated visible nodes (no visible
+      relation edge) and pack them into a tidy grid beside the connected
+      cluster, so they do not fly to the edges (keeps Fit usable + labels
+      reachable). }
+    procedure PackIsolatedNodes(const AVisIdx, AESrc, AEDst: TArray<Integer>);
+    procedure WMXButtonUp(var Msg: TMessage); message WM_XBUTTONUP;
 
     { Returns the cached projection, rebuilding it if necessary. }
     function  CurrentProjection: TGraphProjection;
@@ -366,6 +381,22 @@ begin
   FMiCenter.Caption := 'Center Here';
   FMiCenter.OnClick := CtxCenter;
   FPopup.Items.Add(FMiCenter);
+
+  { Canvas-level items -- always shown, so a right-click never does "nothing"
+    even on empty space or a node the cursor narrowly missed. }
+  FMiSep := TMenuItem.Create(FPopup);
+  FMiSep.Caption := '-';
+  FPopup.Items.Add(FMiSep);
+
+  FMiBack := TMenuItem.Create(FPopup);
+  FMiBack.Caption := 'Back (up one level)';
+  FMiBack.OnClick := CtxBack;
+  FPopup.Items.Add(FMiBack);
+
+  FMiFit := TMenuItem.Create(FPopup);
+  FMiFit.Caption := 'Fit to Window';
+  FMiFit.OnClick := CtxFit;
+  FPopup.Items.Add(FMiFit);
 end;
 
 destructor TDragLintGraphControl.Destroy;
@@ -552,10 +583,90 @@ begin
   FLayout.SetScale(VN, W, H);
   FLayout.StepVisible(FVM.Data, VisIdx, ESrc, EDst, Steps);
 
+  { Nodes with no visible relation edge get no spring and the force pass just
+    scatters them to the far corners (the unexplained "+22" stars the user
+    saw).  Tuck them into a tidy grid beside the connected cluster instead. }
+  PackIsolatedNodes(VisIdx, ESrc, EDst);
+
   { We only reach here when the visible set changed (full relayout, or an
     expand revealed new nodes -- a pure collapse/select returned earlier).
     Re-fit so the revealed members are actually on screen. }
   FitToWindow;
+end;
+
+procedure TDragLintGraphControl.PackIsolatedNodes(
+  const AVisIdx, AESrc, AEDst: TArray<Integer>);
+const
+  CELL_W = 170.0;   { wide enough for a unit label + "(+N)" }
+  CELL_H = 46.0;
+  GAP_Y  = 80.0;    { clearance below the connected cluster }
+var
+  Connected: TDictionary<Integer, Boolean>;
+  I, NIdx, M, Cols, Rows, R, C, K: Integer;
+  HasConn: Boolean;
+  MinX, MaxX, MaxY, CenterX: Double;
+  N: PGraphNode;
+  Isolated: TList<Integer>;
+  GridW, Left, Top: Double;
+begin
+  if FVM = nil then Exit;
+  Connected := TDictionary<Integer, Boolean>.Create;
+  Isolated  := TList<Integer>.Create;
+  try
+    for I := 0 to High(AESrc) do Connected.AddOrSetValue(AESrc[I], True);
+    for I := 0 to High(AEDst) do Connected.AddOrSetValue(AEDst[I], True);
+
+    { Bounding box of the connected nodes (where the hairball sits). }
+    HasConn := False;
+    MinX :=  1.0E30; MaxX := -1.0E30; MaxY := -1.0E30;
+    for I := 0 to High(AVisIdx) do
+    begin
+      NIdx := AVisIdx[I];
+      if Connected.ContainsKey(NIdx) then
+      begin
+        HasConn := True;
+        N := FVM.Data.NodeAt(NIdx);
+        if N.X < MinX then MinX := N.X;
+        if N.X > MaxX then MaxX := N.X;
+        if N.Y > MaxY then MaxY := N.Y;
+      end
+      else
+        Isolated.Add(NIdx);
+    end;
+
+    M := Isolated.Count;
+    if M = 0 then Exit;
+
+    if not HasConn then
+    begin
+      { Nothing is connected (common at the all-projects top level): centre the
+        whole grid on the origin so Fit frames a clean lattice, not a hairball. }
+      MinX := 0; MaxX := 0; MaxY := -GAP_Y;
+    end;
+
+    { Wider-than-tall grid (labels are wide). }
+    Cols := Trunc(Sqrt(M * 1.8)); if Cols < 1 then Cols := 1;
+    Rows := (M + Cols - 1) div Cols;
+    GridW   := Cols * CELL_W;
+    CenterX := (MinX + MaxX) / 2;
+    Left := CenterX - GridW / 2;
+    Top  := MaxY + GAP_Y;
+
+    for K := 0 to M - 1 do
+    begin
+      R := K div Cols;
+      C := K mod Cols;
+      N := FVM.Data.NodeAt(Isolated[K]);
+      N.X  := Left + C * CELL_W + CELL_W / 2;
+      N.Y  := Top  + R * CELL_H + CELL_H / 2;
+      N.VX := 0;
+      N.VY := 0;
+    end;
+    if Rows = 0 then ;  { silence "Rows assigned but not used" on some configs }
+  finally
+    Isolated.Free;
+    Connected.Free;
+  end;
 end;
 
 procedure TDragLintGraphControl.AnimTick(Sender: TObject);
@@ -669,29 +780,64 @@ end;
 function TDragLintGraphControl.HitTestProjNode(SX, SY: Integer;
   const AProj: TGraphProjection): Integer;
 var
-  I:        Integer;
-  PN:       TProjNode;
-  N:        PGraphNode;
-  P:        TPoint;
-  DX, DY:   Integer;
-  RadiusPx: Integer;
+  I:          Integer;
+  PN:         TProjNode;
+  N:          PGraphNode;
+  P:          TPoint;
+  DX, DY:     Integer;
+  RadiusPx:   Integer;
+  NS:         TNodeStyle;
+  IsBox, LabelShown: Boolean;
+  S, Glyph:   string;
+  LW, LH, BL, BT, BR, BB: Integer;
 begin
   Result := -1;
   if FVM = nil then Exit;
+  Canvas.Font.Size := 8;   { match the draw font so label widths line up }
   for I := High(AProj.Nodes) downto 0 do
   begin
     PN := AProj.Nodes[I];
     N  := FVM.Data.NodeAt(PN.NodeIdx);
     P  := WorldToScreen(N.X, N.Y);
+
+    { 1. the node centre / shape. }
     DX := SX - P.X;
     DY := SY - P.Y;
     RadiusPx := Round(N.Radius * FZoom);
-    if RadiusPx < 4 then RadiusPx := 4;
+    if RadiusPx < 6 then RadiusPx := 6;
     if (DX * DX + DY * DY) <= (RadiusPx * RadiusPx) then
-    begin
-      Result := I;
-      Exit;
+      Exit(I);
+
+    { 2. the drawn label -- a far bigger target than the centre dot.  Without
+      this, the wide unit boxes and the packed/collapsed strays are almost
+      unclickable (the user's "clicking does nothing").  Only test it when a
+      label is actually drawn (box nodes always; others gated like the paint). }
+    NS    := NodeStyleFor(N.Kind);
+    IsBox := NS.Shape in [nsBox, nsRoundBox];
+    LabelShown := IsBox or (FZoom >= 0.6) or (N.Id = FVM.SelectedId) or PN.Collapsed;
+    if not LabelShown then Continue;
+
+    S := N.Label_;
+    if S = '' then S := N.Id;
+    Glyph := VisibilityGlyph(N.Modifiers);
+    if Glyph <> '' then S := Glyph + ' ' + S;
+    if PN.Collapsed then
+      S := S + ' (+' + IntToStr(FVM.Data.DescendantCount(PN.NodeIdx)) + ')';
+    LW := Canvas.TextWidth(S);
+    LH := Canvas.TextHeight('Ay');
+
+    if IsBox then
+    begin   { label centred inside the box at P }
+      BL := P.X - LW div 2 - 8;  BR := P.X + LW div 2 + 8;
+      BT := P.Y - LH div 2 - 5;  BB := P.Y + LH div 2 + 5;
+    end
+    else
+    begin   { label below the shape }
+      BL := P.X - LW div 2 - 3;  BR := P.X + LW div 2 + 3;
+      BT := P.Y + RadiusPx;      BB := P.Y + RadiusPx + LH + 4;
     end;
+    if (SX >= BL) and (SX <= BR) and (SY >= BT) and (SY <= BB) then
+      Exit(I);
   end;
 end;
 
@@ -841,33 +987,46 @@ var
   Proj: TGraphProjection;
 begin
   FContextNodeIdx := NodeIdxAt(SX, SY);
-  if FContextNodeIdx < 0 then Exit;
-  N := FVM.Data.NodeAt(FContextNodeIdx);
 
-  { right-click also selects, so the status bar / highlight follow }
-  FVM.SelectNode(N.Id);
-  Invalidate;
-  if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+  { Node items show only when the click landed on a node; the canvas items
+    (Back / Fit) always show so the menu is never empty. }
+  FMiOpen.Visible      := FContextNodeIdx >= 0;
+  FMiGotoIntf.Visible  := FContextNodeIdx >= 0;
+  FMiWhereUsed.Visible := FContextNodeIdx >= 0;
+  FMiCenter.Visible    := FContextNodeIdx >= 0;
+  FMiSep.Visible       := FContextNodeIdx >= 0;
+  FMiBack.Enabled      := (FVM <> nil) and
+    ((Length(FVM.DrillPath) > 0) or FVM.ShowAllTopLevel or FVM.CanGoBack);
 
-  FMiOpen.Enabled := (N.FilePath <> '') and Assigned(FOnOpenSource);
-
-  { enable "Go to Interface" only when an edge connects this node to one }
-  HasIntf := False;
-  Proj := CurrentProjection;
-  for I := 0 to High(Proj.Edges) do
+  if FContextNodeIdx >= 0 then
   begin
-    Other := -1;
-    if Proj.Edges[I].SourceIdx = FContextNodeIdx then
-      Other := Proj.Edges[I].TargetIdx
-    else if Proj.Edges[I].TargetIdx = FContextNodeIdx then
-      Other := Proj.Edges[I].SourceIdx;
-    if (Other >= 0) and (FVM.Data.NodeAt(Other).Kind = nkInterface) then
+    N := FVM.Data.NodeAt(FContextNodeIdx);
+
+    { right-click also selects, so the status bar / highlight follow }
+    FVM.SelectNode(N.Id);
+    Invalidate;
+    if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+
+    FMiOpen.Enabled := (N.FilePath <> '') and Assigned(FOnOpenSource);
+
+    { enable "Go to Interface" only when an edge connects this node to one }
+    HasIntf := False;
+    Proj := CurrentProjection;
+    for I := 0 to High(Proj.Edges) do
     begin
-      HasIntf := True;
-      Break;
+      Other := -1;
+      if Proj.Edges[I].SourceIdx = FContextNodeIdx then
+        Other := Proj.Edges[I].TargetIdx
+      else if Proj.Edges[I].TargetIdx = FContextNodeIdx then
+        Other := Proj.Edges[I].SourceIdx;
+      if (Other >= 0) and (FVM.Data.NodeAt(Other).Kind = nkInterface) then
+      begin
+        HasIntf := True;
+        Break;
+      end;
     end;
+    FMiGotoIntf.Enabled := HasIntf;
   end;
-  FMiGotoIntf.Enabled := HasIntf;
 
   P := ClientToScreen(Point(SX, SY));
   FPopup.Popup(P.X, P.Y);
@@ -927,6 +1086,47 @@ begin
   FOffsetY := N.Y;
   Invalidate;
   if Assigned(FOnZoomChanged) then FOnZoomChanged(Self);
+end;
+
+procedure TDragLintGraphControl.CtxFit(Sender: TObject);
+begin
+  FitToWindow;
+end;
+
+procedure TDragLintGraphControl.CtxBack(Sender: TObject);
+begin
+  NavigateBack;
+end;
+
+procedure TDragLintGraphControl.NavigateBack;
+begin
+  if FVM = nil then Exit;
+  { One predictable "up": leave a drill level, else collapse a show-all, else
+    pop the neighborhood-nav stack.  Nothing left to do -> no-op. }
+  if Length(FVM.DrillPath) > 0 then
+    FVM.DrillToDepth(Length(FVM.DrillPath) - 1)
+  else if FVM.ShowAllTopLevel then
+    FVM.SetShowAllTopLevel(False)
+  else if FVM.CanGoBack then
+    FVM.Back
+  else
+    Exit;
+  FProjValid := False;
+  Relayout;                       { re-settle + Fit so the parent view frames }
+  if Assigned(FOnViewChanged) then FOnViewChanged(Self);
+end;
+
+procedure TDragLintGraphControl.WMXButtonUp(var Msg: TMessage);
+const
+  XBUTTON1 = $0001;   { the "back" thumb button }
+begin
+  inherited;
+  { HiWord(wParam) says which X button; treat the back thumb as "up one". }
+  if HiWord(LongWord(Msg.WParam)) and XBUTTON1 <> 0 then
+  begin
+    NavigateBack;
+    Msg.Result := 1;
+  end;
 end;
 
 procedure TDragLintGraphControl.DrawArrowHead(PA, PB: TPoint);
@@ -1306,8 +1506,10 @@ begin
         Canvas.TextOut(P.X + R + 1, P.Y - R, Badge);
       end;
 
-      { Label below the shape (zoom-gated, or always for the selection). }
-      if (FZoom >= 0.6) or (N.Id = SelId) then
+      { Label below the shape (zoom-gated, or always for the selection or a
+        collapsed node -- otherwise a far-flung collapsed stray shows only its
+        bare "+N" badge with no name, which users could not identify). }
+      if (FZoom >= 0.6) or (N.Id = SelId) or PN.Collapsed then
       begin
         Canvas.Font.Size := 8;
         if (N.Id = SelId) and (FZoom < 0.6) then
@@ -1453,10 +1655,11 @@ begin
   begin
     SetFocus;
     if FVM = nil then Exit;
-    { Move mode lives on the RIGHT button only: right-drag pans the canvas; a
-      right-click without dragging opens the context menu (decided in MouseUp). }
+    { Right-drag pans the canvas; a right-click without dragging opens the
+      context menu (decided in MouseUp). }
     FDragging    := True;
     FRightMoved  := False;
+    FPanButton   := mbRight;
     FDragStartPt := Point(X, Y);
     FDragStartOX := FOffsetX;
     FDragStartOY := FOffsetY;
@@ -1509,14 +1712,16 @@ begin
     Exit;
   end;
 
-  { Empty space (left): clear the selection.  Panning is right-drag only now,
-    so the left button never moves the canvas. }
-  if FVM.SelectedId <> '' then
-  begin
-    FVM.SelectNode('');
-    Invalidate;
-    if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
-  end;
+  { Empty space (left): arm a canvas pan.  If the press turns into a drag we
+    pan (MouseMove); if it stays put it is a click that clears the selection
+    (decided in MouseUp).  Left-drag panning is the intuitive gesture users
+    reach for; right-drag still pans too. }
+  FDragging    := True;
+  FRightMoved  := False;
+  FPanButton   := mbLeft;
+  FDragStartPt := Point(X, Y);
+  FDragStartOX := FOffsetX;
+  FDragStartOY := FOffsetY;
 end;
 
 { The left-click action, run from MouseUp when the press was not a drag.
@@ -1607,7 +1812,8 @@ begin
     Exit;
   end;
 
-  { Right-drag pan -- the ONLY thing that puts us in move mode. }
+  { Canvas pan -- left-drag on empty space or right-drag.  Only an active drag
+    (button held) puts us in move mode; release ends it (MouseUp). }
   if FDragging then
   begin
     if (not FRightMoved) and
@@ -1661,9 +1867,21 @@ begin
       DoLeftClickAt(X, Y, FDownShift);  { a click, not a drag }
     FDragNodeIdx := -1;
     FNodeMoved   := False;
+    FDragging    := False;
     Exit;
   end;
 
+  { Left press on empty space: a drag panned (handled in MouseMove); a plain
+    click clears the selection. }
+  if FDragging and (FPanButton = mbLeft) and (not FRightMoved) then
+  begin
+    if FVM.SelectedId <> '' then
+    begin
+      FVM.SelectNode('');
+      Invalidate;
+      if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
+    end;
+  end;
   FDragging := False;
 end;
 
