@@ -133,6 +133,10 @@ type
     { UML class-box geometry from the last paint, for box/row hit-testing. }
     FUmlBoxes: TArray<TUmlBoxHit>;
 
+    { Per-box member-list scroll offset (NodeIdx -> first visible member row),
+      for wheel-scrolling a box whose member list is longer than the cap. }
+    FBoxScroll: TDictionary<Integer, Integer>;
+
     { Right-click context menu + the node it was raised on. }
     FPopup:          TPopupMenu;
     FMiOpen:         TMenuItem;
@@ -316,6 +320,7 @@ begin
   FVM     := nil;
   FLayout := TGraphLayout.Create;
   FPlaced := TDictionary<Integer, Boolean>.Create;
+  FBoxScroll := TDictionary<Integer, Integer>.Create;
 
   FZoom    := 1.0;
   FOffsetX := 0;
@@ -370,6 +375,7 @@ begin
   FPlaced.Free;
   FHoverTimer.Free;
   FHintWin.Free;
+  FBoxScroll.Free;
   inherited;
 end;
 
@@ -380,6 +386,7 @@ begin
   FVM := AVM;
   FProjValid := False;
   FPlaced.Clear;
+  FBoxScroll.Clear;
   if FVM <> nil then
   begin
     { Present the store collapsed to its top level (finding F8): a fresh bind
@@ -411,6 +418,7 @@ begin
   { New store -> node indices are no longer comparable; drop placement and
     present the new store collapsed to its top level (finding F8). }
   FPlaced.Clear;
+  FBoxScroll.Clear;
   FVM.CollapseAll;
   FProjValid := False;
   Relayout;
@@ -1027,12 +1035,16 @@ const
 var
   Children: TArray<Integer>;
   Rows: TArray<string>;
-  Title, G: string;
-  I, W, H, RowH, TitleH, BoxL, BoxT, Y, Shown, Extra: Integer;
+  Title, G, Ind: string;
+  I, W, H, RowH, TitleH, BoxL, BoxT, Y, Shown, Total, Offset, MaxOff,
+    RowsTop: Integer;
+  HasAbove, HasBelow: Boolean;
   M: PGraphNode;
   NS: TNodeStyle;
+  Hit: TUmlBoxHit;
 begin
   Children := FVM.Data.ChildrenOf(ANodeIdx);
+  Total := Length(Children);
   Title := ANode.Label_;
   if Title = '' then Title := ANode.Id;
   if ANode.Kind = nkInterface then
@@ -1046,33 +1058,40 @@ begin
   TitleH := RowH + 2;
   W := Canvas.TextWidth(Title);
 
-  { build member rows (glyph + name), capped }
-  Shown := Length(Children);
-  Extra := 0;
-  if Shown > MAX_ROWS then
-  begin
-    Extra := Shown - MAX_ROWS;
-    Shown := MAX_ROWS;
-  end;
+  { scroll window: wheel over the box sets FBoxScroll[ANodeIdx]; clamp it }
+  if not FBoxScroll.TryGetValue(ANodeIdx, Offset) then Offset := 0;
+  MaxOff := Total - MAX_ROWS;
+  if MaxOff < 0 then MaxOff := 0;
+  if Offset < 0 then Offset := 0;
+  if Offset > MaxOff then Offset := MaxOff;
+  Shown := Total - Offset;
+  if Shown > MAX_ROWS then Shown := MAX_ROWS;
+  HasAbove := Offset > 0;
+  HasBelow := (Offset + Shown) < Total;
+
   SetLength(Rows, Shown);
   Canvas.Font.Style := [];
   for I := 0 to Shown - 1 do
   begin
-    M := FVM.Data.NodeAt(Children[I]);
+    M := FVM.Data.NodeAt(Children[Offset + I]);
     G := VisibilityGlyph(M.Modifiers);
     if G = '' then G := ' ';
     Rows[I] := G + ' ' + M.Label_;
-    if M.Signature <> '' then            { field/return/param type, once indexed }
+    if M.Signature <> '' then            { field/return type }
       Rows[I] := Rows[I] + ': ' + M.Signature;
     if Canvas.TextWidth(Rows[I]) > W then W := Canvas.TextWidth(Rows[I]);
   end;
-  if (Extra > 0) and
-     (Canvas.TextWidth('... +' + IntToStr(Extra) + ' more') > W) then
-    W := Canvas.TextWidth('... +' + IntToStr(Extra) + ' more');
+  if HasAbove or HasBelow then
+  begin
+    Ind := Format('-- %d-%d of %d (wheel to scroll) --',
+      [Offset + 1, Offset + Shown, Total]);
+    if Canvas.TextWidth(Ind) > W then W := Canvas.TextWidth(Ind);
+  end;
 
   W := W + 2 * PAD;
   H := TitleH + Shown * RowH + PAD;
-  if Extra > 0 then Inc(H, RowH);
+  if HasAbove then Inc(H, RowH);
+  if HasBelow then Inc(H, RowH);
 
   BoxL := ACenter.X - W div 2;
   BoxT := ACenter.Y - H div 2;
@@ -1093,8 +1112,7 @@ begin
   Canvas.Pen.Style := psSolid;
   Canvas.RoundRect(BoxL, BoxT, BoxL + W, BoxT + H, 9, 9);
 
-  { title text + a kind-colored separator line under it (cleaner than a filled
-    bar over the rounded corners) }
+  { title + kind-colored separator }
   NS := NodeStyleFor(ANode.Kind);
   Canvas.Brush.Style := bsClear;
   Canvas.Font.Style := [fsBold];
@@ -1105,30 +1123,38 @@ begin
   Canvas.MoveTo(BoxL + 3, BoxT + TitleH);
   Canvas.LineTo(BoxL + W - 3, BoxT + TitleH);
 
-  { member rows }
+  { member rows, with scroll indicators above/below }
   Canvas.Font.Style := [];
-  Canvas.Font.Color := CL_LABEL;
   Y := BoxT + TitleH + 1;
+  if HasAbove then
+  begin
+    Canvas.Font.Color := TColor($00A0A0A0);
+    Canvas.TextOut(BoxL + PAD, Y, Format('^ %d more above', [Offset]));
+    Inc(Y, RowH);
+  end;
+  RowsTop := Y;          { first real member row -> hit-test anchor }
+  Canvas.Font.Color := CL_LABEL;
   for I := 0 to Shown - 1 do
   begin
     Canvas.TextOut(BoxL + PAD, Y, Rows[I]);
     Inc(Y, RowH);
   end;
-  if Extra > 0 then
+  if HasBelow then
   begin
     Canvas.Font.Color := TColor($00A0A0A0);
-    Canvas.TextOut(BoxL + PAD, Y, '... +' + IntToStr(Extra) + ' more');
+    Canvas.TextOut(BoxL + PAD, Y,
+      Format('v %d more below', [Total - Offset - Shown]));
   end;
 
-  { record geometry so MouseDown can map a click to the title or a member row }
-  var Hit: TUmlBoxHit;
+  { record geometry: RowTop is the first member row, Members is the visible
+    window, so a row click maps to the right member even when scrolled. }
   Hit.NodeIdx := ANodeIdx;
   Hit.Box     := Rect(BoxL, BoxT, BoxL + W, BoxT + H);
-  Hit.RowTop  := BoxT + TitleH + 1;
+  Hit.RowTop  := RowsTop;
   Hit.RowH    := RowH;
   SetLength(Hit.Members, Shown);
   for I := 0 to Shown - 1 do
-    Hit.Members[I] := Children[I];
+    Hit.Members[I] := Children[Offset + I];
   FUmlBoxes := FUmlBoxes + [Hit];
 end;
 
@@ -1777,6 +1803,23 @@ var
 begin
   Result := True;
   Local  := ScreenToClient(MousePos);
+
+  { Wheel over a UML class-box scrolls its member list instead of zooming. }
+  var BI: Integer;
+  for BI := High(FUmlBoxes) downto 0 do
+    if (Local.X >= FUmlBoxes[BI].Box.Left) and (Local.X < FUmlBoxes[BI].Box.Right) and
+       (Local.Y >= FUmlBoxes[BI].Box.Top) and (Local.Y < FUmlBoxes[BI].Box.Bottom) then
+    begin
+      var Idx := FUmlBoxes[BI].NodeIdx;
+      var Off := 0;
+      FBoxScroll.TryGetValue(Idx, Off);
+      if WheelDelta > 0 then Dec(Off) else Inc(Off);
+      if Off < 0 then Off := 0;
+      FBoxScroll.AddOrSetValue(Idx, Off);   { DrawUmlTypeBox clamps the top }
+      Invalidate;
+      Exit;
+    end;
+
   MouseWorld := ScreenToWorld(Local.X, Local.Y);
   ZoomMul := IfThen(WheelDelta > 0, 1.15, 1.0 / 1.15);
   NewZoom := FZoom * ZoomMul;
