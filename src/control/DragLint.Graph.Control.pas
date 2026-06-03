@@ -138,6 +138,11 @@ type
       for wheel-scrolling a box whose member list is longer than the cap. }
     FBoxScroll: TDictionary<Integer, Integer>;
 
+    { Visible-edge degree per node index, rebuilt each paint.  A high-degree
+      HUB always shows its label so the node every arrow converges on is never
+      an unidentifiable dot. }
+    FDegree: TDictionary<Integer, Integer>;
+
     { Right-click context menu + the node it was raised on. }
     FPopup:          TPopupMenu;
     FMiOpen:         TMenuItem;
@@ -336,6 +341,7 @@ begin
   FLayout := TGraphLayout.Create;
   FPlaced := TDictionary<Integer, Boolean>.Create;
   FBoxScroll := TDictionary<Integer, Integer>.Create;
+  FDegree    := TDictionary<Integer, Integer>.Create;
 
   FZoom    := 1.0;
   FOffsetX := 0;
@@ -407,6 +413,7 @@ begin
   FHoverTimer.Free;
   FHintWin.Free;
   FBoxScroll.Free;
+  FDegree.Free;
   inherited;
 end;
 
@@ -1380,11 +1387,24 @@ var
   Badge:    string;
   DescN:    Integer;
   SelId:    string;
+  J, Deg:   Integer;
+  IsHub:    Boolean;
 begin
   if FVM = nil then Exit;
   SelId := FVM.SelectedId;
   TextH := Canvas.TextHeight('A');
   SetLength(FUmlBoxes, 0);   { rebuilt below as UML boxes are drawn }
+
+  { Visible-edge degree per node, so a hub (the node many arrows point at)
+    always shows its label even when zoomed out. }
+  FDegree.Clear;
+  for J := 0 to High(AProj.Edges) do
+  begin
+    if not FDegree.TryGetValue(AProj.Edges[J].SourceIdx, Deg) then Deg := 0;
+    FDegree.AddOrSetValue(AProj.Edges[J].SourceIdx, Deg + 1);
+    if not FDegree.TryGetValue(AProj.Edges[J].TargetIdx, Deg) then Deg := 0;
+    FDegree.AddOrSetValue(AProj.Edges[J].TargetIdx, Deg + 1);
+  end;
 
   for I := 0 to High(AProj.Nodes) do
   begin
@@ -1506,10 +1526,13 @@ begin
         Canvas.TextOut(P.X + R + 1, P.Y - R, Badge);
       end;
 
-      { Label below the shape (zoom-gated, or always for the selection or a
-        collapsed node -- otherwise a far-flung collapsed stray shows only its
-        bare "+N" badge with no name, which users could not identify). }
-      if (FZoom >= 0.6) or (N.Id = SelId) or PN.Collapsed then
+      { Label below the shape (zoom-gated, or always for the selection, a
+        collapsed node, or a HUB).  Otherwise a far-flung collapsed stray shows
+        only its bare "+N" badge, and the node every arrow converges on shows
+        nothing -- both leave the user unable to tell what they are looking at. }
+      if not FDegree.TryGetValue(PN.NodeIdx, Deg) then Deg := 0;
+      IsHub := Deg >= 5;
+      if (FZoom >= 0.6) or (N.Id = SelId) or PN.Collapsed or IsHub then
       begin
         Canvas.Font.Size := 8;
         if (N.Id = SelId) and (FZoom < 0.6) then
@@ -1790,6 +1813,24 @@ var
 begin
   inherited;
 
+  { Safety net for "stuck in move mode": Shift carries the LIVE button state.
+    If we think a node-drag or pan is active but its button is no longer held,
+    a MouseUp was missed (focus stolen when a click opened source, or a click
+    handler raised) -- drop out so nothing follows a button-up mouse. }
+  if (FDragNodeIdx >= 0) and not (ssLeft in Shift) then
+  begin
+    FDragNodeIdx := -1;
+    FNodeMoved   := False;
+    Cursor       := crDefault;
+  end;
+  if FDragging and
+     (((FPanButton = mbLeft)  and not (ssLeft  in Shift)) or
+      ((FPanButton = mbRight) and not (ssRight in Shift))) then
+  begin
+    FDragging := False;
+    Cursor    := crDefault;
+  end;
+
   { Left node-drag -- only while the left button is held. }
   if FDragNodeIdx >= 0 then
   begin
@@ -1863,11 +1904,16 @@ begin
 
   if FDragNodeIdx >= 0 then
   begin
-    if not FNodeMoved then
-      DoLeftClickAt(X, Y, FDownShift);  { a click, not a drag }
-    FDragNodeIdx := -1;
-    FNodeMoved   := False;
-    FDragging    := False;
+    try
+      if not FNodeMoved then
+        DoLeftClickAt(X, Y, FDownShift);  { a click, not a drag }
+    finally
+      { reset even if the click handler raised -- otherwise the node stays
+        grabbed and follows the (button-up) mouse: the "stuck move mode" bug. }
+      FDragNodeIdx := -1;
+      FNodeMoved   := False;
+      FDragging    := False;
+    end;
     Exit;
   end;
 
