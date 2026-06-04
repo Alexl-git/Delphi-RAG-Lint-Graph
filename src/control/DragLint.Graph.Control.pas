@@ -84,6 +84,12 @@ type
     RowTop:  Integer;        { Y of the first member row }
     RowH:    Integer;        { row height }
     Members: TArray<Integer>;{ child node indices, in row order (capped) }
+    Track:   TRect;          { scrollbar track (empty if not scrollable) }
+    Thumb:   TRect;          { scrollbar thumb }
+    Grip:    TRect;          { bottom-right resize grip }
+    Total:   Integer;        { total member count }
+    Offset:  Integer;        { first shown member }
+    VisRows: Integer;        { rows currently shown }
   end;
 
   TDragLintGraphControl = class(TCustomControl)
@@ -137,6 +143,25 @@ type
     { Per-box member-list scroll offset (NodeIdx -> first visible member row),
       for wheel-scrolling a box whose member list is longer than the cap. }
     FBoxScroll: TDictionary<Integer, Integer>;
+
+    { Per-box visible-row cap override (NodeIdx -> rows), set by dragging the
+      box's bottom-right resize grip.  Absent => the default MAX_ROWS. }
+    FBoxMaxRows: TDictionary<Integer, Integer>;
+
+    { Scrollbar-thumb drag state (dragging the in-box scrollbar). }
+    FScrollDragBox:  Integer;   { node idx of the box, -1 if none }
+    FScrollStartY:   Integer;
+    FScrollStartOff: Integer;
+    FScrollTotal:    Integer;
+    FScrollVis:      Integer;
+    FScrollTrackTop: Integer;
+    FScrollTrackH:   Integer;
+
+    { Box resize-grip drag state. }
+    FResizeBox:       Integer;  { node idx being resized, -1 if none }
+    FResizeStartY:    Integer;
+    FResizeStartRows: Integer;
+    FResizeRowH:      Integer;
 
     { Visible-edge degree per node index, rebuilt each paint.  A high-degree
       HUB always shows its label so the node every arrow converges on is never
@@ -332,6 +357,10 @@ constructor TDragLintGraphControl.Create(AOwner: TComponent);
 begin
   inherited;
   ControlStyle := ControlStyle + [csOpaque, csClickEvents, csCaptureMouse];
+  { Paint to an offscreen buffer so a full repaint (pan, zoom, box scroll)
+    blits in one go instead of flashing the background -- kills the flicker
+    the user saw when scrolling inside a UML box. }
+  DoubleBuffered := True;
   Width  := 600;
   Height := 400;
   TabStop := True;
@@ -340,8 +369,11 @@ begin
   FVM     := nil;
   FLayout := TGraphLayout.Create;
   FPlaced := TDictionary<Integer, Boolean>.Create;
-  FBoxScroll := TDictionary<Integer, Integer>.Create;
-  FDegree    := TDictionary<Integer, Integer>.Create;
+  FBoxScroll  := TDictionary<Integer, Integer>.Create;
+  FBoxMaxRows := TDictionary<Integer, Integer>.Create;
+  FDegree     := TDictionary<Integer, Integer>.Create;
+  FScrollDragBox := -1;
+  FResizeBox     := -1;
 
   FZoom    := 1.0;
   FOffsetX := 0;
@@ -413,6 +445,7 @@ begin
   FHoverTimer.Free;
   FHintWin.Free;
   FBoxScroll.Free;
+  FBoxMaxRows.Free;
   FDegree.Free;
   inherited;
 end;
@@ -1174,13 +1207,26 @@ var
   OldWidth: Integer;
   OldColor: TColor;
   Alpha:    TColor;
+  Vis:      TDictionary<Integer, Boolean>;
 begin
   OldStyle := Canvas.Pen.Style;
   OldWidth := Canvas.Pen.Width;
   OldColor := Canvas.Pen.Color;
+
+  { Only draw an edge when BOTH endpoints are visible projection nodes.  An
+    edge to an off-view node (e.g. a type used in another unit while drilled
+    into this one) would otherwise be a line to that node's stale position --
+    several of them converging made the unlabelled "mystery hubs". }
+  Vis := TDictionary<Integer, Boolean>.Create(Length(AProj.Nodes));
+  try
+    for I := 0 to High(AProj.Nodes) do
+      Vis.AddOrSetValue(AProj.Nodes[I].NodeIdx, True);
+
   for I := 0 to High(AProj.Edges) do
   begin
     PE  := AProj.Edges[I];
+    if not (Vis.ContainsKey(PE.SourceIdx) and Vis.ContainsKey(PE.TargetIdx)) then
+      Continue;
     NA  := FVM.Data.NodeAt(PE.SourceIdx);
     NB  := FVM.Data.NodeAt(PE.TargetIdx);
     PA  := WorldToScreen(NA.X, NA.Y);
@@ -1229,6 +1275,9 @@ begin
       DrawArrowHead(PA, PB);
     end;
   end;
+  finally
+    Vis.Free;
+  end;
   Canvas.Pen.Style := OldStyle;
   Canvas.Pen.Width := OldWidth;
   Canvas.Pen.Color := OldColor;
@@ -1238,13 +1287,16 @@ procedure TDragLintGraphControl.DrawUmlTypeBox(ANode: PGraphNode;
   ANodeIdx: Integer; const ACenter: TPoint; ASelected: Boolean);
 const
   PAD = 4;
-  MAX_ROWS = 12;
+  MAX_ROWS = 12;   { default visible-row cap; per-box override via resize grip }
+  SB_W = 9;        { in-box scrollbar width }
+  GRIP = 12;       { bottom-right resize grip size }
 var
   Children: TArray<Integer>;
   Rows: TArray<string>;
   Title, G, Ind: string;
   I, W, H, RowH, TitleH, BoxL, BoxT, Y, Shown, Total, Offset, MaxOff,
     RowsTop: Integer;
+  MaxRows, TrackTop, TrackBot, TrackH, ThumbH, ThumbTop, Range: Integer;
   HasAbove, HasBelow: Boolean;
   M: PGraphNode;
   NS: TNodeStyle;
@@ -1267,14 +1319,18 @@ begin
   TitleH := RowH + 2;
   W := Canvas.TextWidth(Title);
 
-  { scroll window: wheel over the box sets FBoxScroll[ANodeIdx]; clamp it }
+  { visible-row cap: per-box override (set by the resize grip) else default }
+  if not FBoxMaxRows.TryGetValue(ANodeIdx, MaxRows) then MaxRows := MAX_ROWS;
+  if MaxRows < 2 then MaxRows := 2;
+
+  { scroll window: wheel/thumb sets FBoxScroll[ANodeIdx]; clamp it }
   if not FBoxScroll.TryGetValue(ANodeIdx, Offset) then Offset := 0;
-  MaxOff := Total - MAX_ROWS;
+  MaxOff := Total - MaxRows;
   if MaxOff < 0 then MaxOff := 0;
   if Offset < 0 then Offset := 0;
   if Offset > MaxOff then Offset := MaxOff;
   Shown := Total - Offset;
-  if Shown > MAX_ROWS then Shown := MAX_ROWS;
+  if Shown > MaxRows then Shown := MaxRows;
   HasAbove := Offset > 0;
   HasBelow := (Offset + Shown) < Total;
 
@@ -1298,6 +1354,7 @@ begin
   end;
 
   W := W + 2 * PAD;
+  if HasAbove or HasBelow then Inc(W, SB_W);   { room for the scrollbar }
   H := TitleH + Shown * RowH + PAD;
   if HasAbove then Inc(H, RowH);
   if HasBelow then Inc(H, RowH);
@@ -1361,9 +1418,51 @@ begin
   Hit.Box     := Rect(BoxL, BoxT, BoxL + W, BoxT + H);
   Hit.RowTop  := RowsTop;
   Hit.RowH    := RowH;
+  Hit.Total   := Total;
+  Hit.Offset  := Offset;
+  Hit.VisRows := Shown;
+  Hit.Track   := Rect(0, 0, 0, 0);
+  Hit.Thumb   := Rect(0, 0, 0, 0);
   SetLength(Hit.Members, Shown);
   for I := 0 to Shown - 1 do
     Hit.Members[I] := Children[Offset + I];
+
+  { In-box scrollbar (right edge) when the member list is taller than the box.
+    Track spans the member-row band; thumb size/pos reflect window/offset. }
+  if Total > MaxRows then
+  begin
+    TrackTop := BoxT + TitleH + 2;
+    TrackBot := BoxT + H - PAD;
+    TrackH   := TrackBot - TrackTop;
+    if TrackH < 8 then TrackH := 8;
+    Range := Total - Shown; if Range < 1 then Range := 1;
+    ThumbH := Round(TrackH * Shown / Total);
+    if ThumbH < 14 then ThumbH := 14;
+    if ThumbH > TrackH then ThumbH := TrackH;
+    ThumbTop := TrackTop + Round((TrackH - ThumbH) * Offset / Range);
+
+    Hit.Track := Rect(BoxL + W - SB_W, TrackTop, BoxL + W - 2, TrackBot);
+    Hit.Thumb := Rect(BoxL + W - SB_W, ThumbTop, BoxL + W - 2, ThumbTop + ThumbH);
+
+    Canvas.Brush.Style := bsSolid;
+    Canvas.Pen.Style   := psSolid;
+    Canvas.Pen.Width   := 1;
+    Canvas.Brush.Color := TColor($00303838);    { track }
+    Canvas.Pen.Color   := TColor($00505858);
+    Canvas.Rectangle(Hit.Track.Left, Hit.Track.Top, Hit.Track.Right, Hit.Track.Bottom);
+    Canvas.Brush.Color := TColor($00808C8C);    { thumb }
+    Canvas.Pen.Color   := TColor($00A0AAAA);
+    Canvas.RoundRect(Hit.Thumb.Left, Hit.Thumb.Top, Hit.Thumb.Right, Hit.Thumb.Bottom, 3, 3);
+  end;
+
+  { Bottom-right resize grip (drag to change how many rows the box shows). }
+  Hit.Grip := Rect(BoxL + W - GRIP, BoxT + H - GRIP, BoxL + W, BoxT + H);
+  Canvas.Pen.Color := TColor($00909090);
+  Canvas.Pen.Width := 1;
+  Canvas.Pen.Style := psSolid;
+  Canvas.MoveTo(BoxL + W - 3, BoxT + H - GRIP + 2); Canvas.LineTo(BoxL + W - GRIP + 2, BoxT + H - 3);
+  Canvas.MoveTo(BoxL + W - 3, BoxT + H - GRIP + 6); Canvas.LineTo(BoxL + W - GRIP + 6, BoxT + H - 3);
+
   FUmlBoxes := FUmlBoxes + [Hit];
 end;
 
@@ -1692,6 +1791,44 @@ begin
   SetFocus;
   if FVM = nil then Exit;
 
+  { In-box scrollbar thumb / resize grip / track take precedence over grabbing
+    the whole box as a node (MovableNodeAt would return the box for any point
+    inside it). }
+  var BI: Integer;
+  var HB: TUmlBoxHit;
+  for BI := High(FUmlBoxes) downto 0 do
+  begin
+    HB := FUmlBoxes[BI];
+    if PtInRect(HB.Grip, Point(X, Y)) then
+    begin
+      FResizeBox       := HB.NodeIdx;
+      FResizeStartY    := Y;
+      FResizeStartRows := HB.VisRows;
+      FResizeRowH      := HB.RowH;
+      Exit;
+    end;
+    if (HB.Track.Right > HB.Track.Left) and PtInRect(HB.Thumb, Point(X, Y)) then
+    begin
+      FScrollDragBox  := HB.NodeIdx;
+      FScrollStartY   := Y;
+      FScrollStartOff := HB.Offset;
+      FScrollTotal    := HB.Total;
+      FScrollVis      := HB.VisRows;
+      FScrollTrackTop := HB.Track.Top;
+      FScrollTrackH   := HB.Track.Bottom - HB.Track.Top;
+      Exit;
+    end;
+    if (HB.Track.Right > HB.Track.Left) and PtInRect(HB.Track, Point(X, Y)) then
+    begin   { page up/down by clicking the track above/below the thumb }
+      var POff := HB.Offset;
+      if Y < HB.Thumb.Top then Dec(POff, HB.VisRows) else Inc(POff, HB.VisRows);
+      if POff < 0 then POff := 0;
+      FBoxScroll.AddOrSetValue(HB.NodeIdx, POff);
+      Invalidate;
+      Exit;
+    end;
+  end;
+
   { Left-press on a node: defer the action to MouseUp so a drag (move the node)
     and a click (select/open) can be distinguished.  Capture the grab offset so
     the node tracks the cursor without jumping. }
@@ -1813,6 +1950,45 @@ var
 begin
   inherited;
 
+  { Active in-box scrollbar drag: map the vertical travel to a row offset. }
+  if FScrollDragBox >= 0 then
+  begin
+    if not (ssLeft in Shift) then
+    begin
+      FScrollDragBox := -1; Cursor := crDefault;
+    end
+    else
+    begin
+      var Rng := FScrollTotal - FScrollVis; if Rng < 1 then Rng := 1;
+      var NewOff := FScrollStartOff +
+        Round((Y - FScrollStartY) * FScrollTotal / Max(1, FScrollTrackH));
+      if NewOff < 0 then NewOff := 0;
+      if NewOff > Rng then NewOff := Rng;
+      FBoxScroll.AddOrSetValue(FScrollDragBox, NewOff);
+      Invalidate;
+      Exit;
+    end;
+  end;
+
+  { Active resize drag: vertical travel changes the visible-row cap. }
+  if FResizeBox >= 0 then
+  begin
+    if not (ssLeft in Shift) then
+    begin
+      FResizeBox := -1; Cursor := crDefault;
+    end
+    else
+    begin
+      var NewRows := FResizeStartRows + ((Y - FResizeStartY) div Max(1, FResizeRowH));
+      if NewRows < 2 then NewRows := 2;
+      if NewRows > 200 then NewRows := 200;
+      FBoxMaxRows.AddOrSetValue(FResizeBox, NewRows);
+      Cursor := crSizeNWSE;
+      Invalidate;
+      Exit;
+    end;
+  end;
+
   { Safety net for "stuck in move mode": Shift carries the LIVE button state.
     If we think a node-drag or pan is active but its button is no longer held,
     a MouseUp was missed (focus stolen when a click opened source, or a click
@@ -1901,6 +2077,14 @@ begin
   end;
 
   if Button <> mbLeft then Exit;
+
+  { End an in-box scrollbar / resize drag without disturbing selection. }
+  if (FScrollDragBox >= 0) or (FResizeBox >= 0) then
+  begin
+    FScrollDragBox := -1;
+    FResizeBox     := -1;
+    Exit;
+  end;
 
   if FDragNodeIdx >= 0 then
   begin
