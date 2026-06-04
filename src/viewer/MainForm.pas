@@ -383,9 +383,11 @@ begin
   else
     Kind := 'Symbol';
   end;
+  if (N.KindText <> '') and (N.Kind in [nkType, nkOther]) then
+    Kind := N.KindText;   { precise indexed kind, e.g. enum / set / alias }
   Info := Kind + ': ' + N.Id;
   if N.FilePath <> '' then
-    Info := Info + Format('  (%s:%d)', [ExtractFileName(N.FilePath), N.Line]);
+    Info := Info + Format('  (%s:%d:%d)', [ExtractFileName(N.FilePath), N.Line, N.Col]);
   FStatus.SimpleText := Info;
 end;
 

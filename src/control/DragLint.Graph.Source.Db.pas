@@ -219,6 +219,16 @@ begin
   else if AKind = 'const'          then Result := nkConst
   else if AKind = 'var'            then Result := nkVar
   else if AKind = 'type'           then Result := nkType
+  { type-family declarations: colour + render as a Type rather than a generic
+    grey "Other" dot, and (being nkType) draw as a member-listing UML box. }
+  else if AKind = 'enum'           then Result := nkType
+  else if AKind = 'set'            then Result := nkType
+  else if AKind = 'subrange'       then Result := nkType
+  else if AKind = 'array'          then Result := nkType
+  else if AKind = 'alias'          then Result := nkType
+  else if AKind = 'pointer'        then Result := nkType
+  else if AKind = 'proc_type'      then Result := nkType
+  else if AKind = 'class_ref'      then Result := nkType
   else if AKind = 'sql_table'      then Result := nkSqlTable
   else if AKind = 'sql_column'     then Result := nkSqlColumn
   else if AKind = 'sql_index'      then Result := nkSqlIndex
@@ -400,8 +410,8 @@ begin
 
               Node.Id        := Q.FieldByName('qualified_name').AsString;
               Node.Label_    := Q.FieldByName('name').AsString;
-              Node.Kind      := KindTextToNodeKind(
-                                  Q.FieldByName('kind').AsString);
+              Node.KindText  := Q.FieldByName('kind').AsString;
+              Node.Kind      := KindTextToNodeKind(Node.KindText);
               Node.DbId      := SymId;
               Node.Signature := Q.FieldByName('signature').AsString;
               Node.Modifiers := Q.FieldByName('modifiers').AsString;

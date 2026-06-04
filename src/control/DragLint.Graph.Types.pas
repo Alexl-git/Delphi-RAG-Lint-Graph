@@ -64,6 +64,7 @@ type
     Signature: string;      { symbols.signature (e.g. SQL column type) }
     Modifiers: string;      { symbols.modifiers -- member visibility for UML glyphs }
     Section:   string;      { 'interface' | 'implementation' | '' (usability) }
+    KindText:  string;      { raw symbols.kind ('enum','set','alias',...) for display }
     ParentId: string;       { id of containment parent; '' if none/root }
     ParentIdx: Integer;     { resolved by BuildHierarchy; -1 = root }
     Documented:    Boolean; { has a symbol_docs row }

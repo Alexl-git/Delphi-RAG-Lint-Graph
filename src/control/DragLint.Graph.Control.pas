@@ -1309,7 +1309,9 @@ begin
   if ANode.Kind = nkInterface then
     Title := '<<interface>> ' + Title
   else if ANode.Kind = nkRecord then
-    Title := '<<record>> ' + Title;
+    Title := '<<record>> ' + Title
+  else if (ANode.Kind = nkType) and (ANode.KindText <> '') then
+    Title := '<<' + ANode.KindText + '>> ' + Title;   { e.g. <<enum>> }
   if ANode.Section = 'implementation' then
     Title := Title + '  [impl-only]';   { not usable from another unit }
 
@@ -1516,12 +1518,14 @@ begin
     NS := NodeStyleFor(N.Kind);
     FillCol := TColor(NS.Fill);
 
-    { UML class-box: classes/interfaces/records list their members inside a
-      titled frame (Phase 5).  Drawn when zoomed in enough to read, or when
-      selected; at low zoom they fall through to the compact rounded-rect so
-      the overview stays fast and uncluttered.  Members are read from
-      TGraphData, so they are never also drawn as separate nodes. }
-    if (N.Kind in [nkClass, nkInterface, nkRecord]) and
+    { UML class-box: classes/interfaces/records -- and any type with members
+      (enum values, set elements, ...) -- list their members inside a titled
+      frame.  Drawn when zoomed in enough to read, or when selected; at low
+      zoom they fall through to the compact rounded-rect so the overview stays
+      fast.  Members are read from TGraphData, never drawn as separate nodes. }
+    if ((N.Kind in [nkClass, nkInterface, nkRecord]) or
+        ((N.Kind = nkType) and
+         (Length(FVM.Data.ChildrenOf(PN.NodeIdx)) > 0))) and
        ((FZoom >= 0.4) or (N.Id = SelId)) then
     begin
       DrawUmlTypeBox(N, PN.NodeIdx, P, N.Id = SelId);
@@ -2146,6 +2150,10 @@ begin
   else
     Kind := 'Symbol';
   end;
+  { prefer the precise indexed kind ('enum','set','alias',...) when our coarse
+    node kind would otherwise say a generic "Type"/"Symbol". }
+  if (N.KindText <> '') and (N.Kind in [nkType, nkOther]) then
+    Kind := N.KindText;
 
   Txt := Kind + ': ' + N.Id;
   if N.Signature <> '' then
