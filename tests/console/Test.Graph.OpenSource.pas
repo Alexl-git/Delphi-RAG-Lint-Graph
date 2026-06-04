@@ -149,6 +149,15 @@ var
   Server: TPipeServerThread;
   Ok:     Boolean;
 begin
+  { These live tests assume exclusive control of the global pipe name.  If a
+    real plugin server is already listening (developer has the IDE open), our
+    test server collides with it -- skip rather than fail/crash. }
+  if WaitNamedPipe(OPEN_SOURCE_PIPE_NAME, 50) then
+  begin
+    WriteLn('    SKIP: drag-lint plugin pipe server is live (IDE open)');
+    Exit;
+  end;
+
   Ready  := CreateEvent(nil, True, False, nil);
   Server := TPipeServerThread.Create(Ready);
   try
@@ -189,7 +198,13 @@ var
 begin
   { With no server listening, the client must fail fast (within the wait
     window) so the host can fall back to ShellExecute -- it must NOT block or
-    raise. }
+    raise.  If a real plugin pipe IS listening (IDE open), the no-server
+    precondition can't hold -- skip. }
+  if WaitNamedPipe(OPEN_SOURCE_PIPE_NAME, 50) then
+  begin
+    WriteLn('    SKIP: drag-lint plugin pipe server is live (IDE open)');
+    Exit;
+  end;
   Ok := SendOpenSource('C:\nope\missing.pas', 1, 200);
   Check(not Ok, 'SendOpenSource returns False when no plugin is listening');
 end;

@@ -286,6 +286,10 @@ type
     procedure Bind(const AVM: IGraphViewModel);
 
     procedure FitToWindow;
+    { Center the view on a node by id (used by the structure panel: select a
+      tree item -> show it in the graph).  Selects it too, and pans so it is at
+      the screen center.  No-op if the id is not a placed node. }
+    procedure CenterOnNode(const AId: string);
 
     { SetZoomLevel: clamps AZoom to [0.02, 20], re-anchors around the
       control center (world point at center stays fixed), then Invalidate.
@@ -1128,6 +1132,26 @@ begin
   if Assigned(FOnZoomChanged) then FOnZoomChanged(Self);
 end;
 
+procedure TDragLintGraphControl.CenterOnNode(const AId: string);
+var
+  Idx: Integer;
+  N:   PGraphNode;
+begin
+  if (FVM = nil) or (AId = '') then Exit;
+  { make sure the node is revealed + selected first }
+  FVM.NavigateTo(AId);
+  FProjValid := False;
+  EnsureLayout(False);   { seed/settle any newly revealed nodes so X/Y are real }
+  Idx := FVM.Data.FindNodeIndex(AId);
+  if Idx < 0 then Exit;
+  N := FVM.Data.NodeAt(Idx);
+  FOffsetX := N.X;       { FOffsetX/Y is the world point at screen center }
+  FOffsetY := N.Y;
+  Invalidate;
+  if Assigned(FOnZoomChanged)      then FOnZoomChanged(Self);
+  if Assigned(FOnSelectionChange)  then FOnSelectionChange(Self);
+end;
+
 procedure TDragLintGraphControl.CtxFit(Sender: TObject);
 begin
   FitToWindow;
@@ -1700,23 +1724,19 @@ begin
   if Count = 0 then Exit;
 
   Canvas.Font.Size  := 7;
-  LineH := Canvas.TextHeight('A') + 4;
-  X := LEGEND_MARGIN;
-  Y := LEGEND_MARGIN;
+  LineH := Canvas.TextHeight('A') + 6;
 
-  { background box }
+  { Horizontal strip across the very top: a thin bar, swatches + names laid out
+    left to right (was a vertical box in the corner). }
   Canvas.Brush.Color := TColor($00383838);
   Canvas.Brush.Style := bsSolid;
   Canvas.Pen.Color   := TColor($00606060);
   Canvas.Pen.Style   := psSolid;
   Canvas.Pen.Width   := 1;
-  Canvas.Rectangle(X, Y,
-    X + LEGEND_SWATCH + 80 + LEGEND_MARGIN,
-    Y + Count * LineH + LEGEND_MARGIN);
+  Canvas.Rectangle(0, 0, Width, LineH + 4);
 
-  X := X + LEGEND_MARGIN div 2;
-  Y := Y + LEGEND_MARGIN div 2;
-
+  X := LEGEND_MARGIN;
+  Y := 2;
   for K := Low(TGraphNodeKind) to High(TGraphNodeKind) do
   begin
     if not Present[K] then Continue;
@@ -1731,7 +1751,8 @@ begin
     Canvas.Brush.Style := bsClear;
     Canvas.Font.Color  := CL_LABEL;
     Canvas.TextOut(X + LEGEND_SWATCH + 4, Y, Name);
-    Inc(Y, LineH);
+    Inc(X, LEGEND_SWATCH + 8 + Canvas.TextWidth(Name) + 14);
+    if X > Width - 60 then Break;   { don't overrun the strip }
   end;
 end;
 

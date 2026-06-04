@@ -8,6 +8,7 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Math, System.UITypes,
+  System.Generics.Collections, System.Generics.Defaults,
   Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls,
   Vcl.Graphics,
   Winapi.Windows, Winapi.Messages, Winapi.ShellAPI,
@@ -16,12 +17,25 @@ uses
   DragLint.Graph.Source.Db,
   DragLint.Graph.ViewModel,
   DragLint.Graph.Control,
+  DragLint.Graph.Style,
   DragLint.Graph.OpenSourceClient;
 
 const
   WM_LOADGRAPH = WM_USER + 100;
 
 type
+  { Structure-tree node descriptor (attached to each TTreeNode.Data).  The tree
+    is lazy: each node knows just enough to populate its children on expand. }
+  TStructKind = (skUnit, skSection, skCategory, skSymbol);
+  TStructTag = class
+    Kind:      TStructKind;
+    GraphId:   string;    { unit id (skUnit/skSection/skCategory) or symbol id (skSymbol) }
+    Section:   string;    { 'interface' / 'implementation' (skSection, skCategory) }
+    Cat:       Integer;   { category code (skCategory) }
+    IsType:    Boolean;   { skSymbol that has members -> expandable }
+    Populated: Boolean;
+  end;
+
   TfrmMain = class(TForm)
   private
     FGraph:      TDragLintGraphControl;
@@ -35,7 +49,22 @@ type
     FCatalog:    IDbCatalog;
     FDbPaths:    TArray<string>;
     FLoaded:     Boolean;
+    { Structure panel (left dock) }
+    FStructPanel: TPanel;
+    FStructHdr:   TPanel;
+    FSplitter:    TSplitter;
+    FTree:        TTreeView;
+    FStructTags:  TObjectList<TStructTag>;
+    FSyncingTree: Boolean;
     procedure CreateControls;
+    procedure BuildStructureRoots;
+    procedure ClearStructure;
+    function  NewTag(AKind: TStructKind; const AGraphId, ASection: string;
+      ACat: Integer): TStructTag;
+    procedure TreeExpanding(Sender: TObject; Node: TTreeNode;
+      var AllowExpansion: Boolean);
+    procedure TreeChange(Sender: TObject; Node: TTreeNode);
+    function  CategoryOf(AKind: TGraphNodeKind): Integer;
     procedure ParseDbArgs;
     procedure RunLoad;
     procedure FormShow(Sender: TObject);
@@ -59,6 +88,7 @@ type
     function  ZoomToPos(AZoom: Double): Integer;
   public
     constructor Create(AOwner: TComponent); override;
+    destructor Destroy; override;
   end;
 
 var
@@ -76,9 +106,16 @@ begin
   ClientWidth := 1100;
   ClientHeight := 700;
   FLoaded := False;
+  FStructTags := TObjectList<TStructTag>.Create(True);
   CreateControls;
   ParseDbArgs;
   OnShow := FormShow;
+end;
+
+destructor TfrmMain.Destroy;
+begin
+  FStructTags.Free;
+  inherited;
 end;
 
 procedure TfrmMain.CreateControls;
@@ -129,6 +166,51 @@ begin
   FZoomBar.TickStyle   := tsNone;
   FZoomBar.OnChange    := ZoomBarChange;
   FSyncingZoom := False;
+
+  { Structure panel docked on the left: a header + a lazy tree of every unit's
+    interface/implementation members.  Selecting an item shows it in the graph.
+    Created before the graph so it claims the left edge; the graph takes the
+    remaining client area. }
+  FStructPanel := TPanel.Create(Self);
+  FStructPanel.Parent     := Self;
+  FStructPanel.Align      := alLeft;
+  FStructPanel.Width      := 290;
+  FStructPanel.BevelOuter := bvNone;
+  FStructPanel.Color      := TColor($002A2A2A);
+  FStructPanel.ParentBackground := False;
+
+  FStructHdr := TPanel.Create(Self);
+  FStructHdr.Parent     := FStructPanel;
+  FStructHdr.Align      := alTop;
+  FStructHdr.Height     := 22;
+  FStructHdr.BevelOuter := bvNone;
+  FStructHdr.Color      := TColor($00383838);
+  FStructHdr.ParentBackground := False;
+  FStructHdr.Font.Color := clWhite;
+  FStructHdr.Font.Style := [fsBold];
+  FStructHdr.Alignment  := taLeftJustify;
+  FStructHdr.Caption    := '  Structure';
+
+  FTree := TTreeView.Create(Self);
+  FTree.Parent        := FStructPanel;
+  FTree.Align         := alClient;
+  FTree.ReadOnly      := True;
+  FTree.HideSelection := False;
+  FTree.RowSelect     := True;
+  FTree.ShowLines     := True;
+  FTree.Color         := TColor($002A2A2A);
+  FTree.Font.Color    := clWhite;
+  FTree.Font.Name     := 'Segoe UI';
+  FTree.Font.Size     := 9;
+  FTree.OnExpanding   := TreeExpanding;
+  FTree.OnChange      := TreeChange;
+
+  FSplitter := TSplitter.Create(Self);
+  FSplitter.Parent    := Self;
+  FSplitter.Align     := alLeft;
+  FSplitter.Width     := 5;
+  FSplitter.Color     := TColor($00505050);
+  FSplitter.MinSize   := 140;
 
   FGraph := TDragLintGraphControl.Create(Self);
   FGraph.Parent := Self;
@@ -237,6 +319,241 @@ begin
   FVM.Projection;
   UpdateShowAllButton;
   UpdateBreadcrumbs;
+  BuildStructureRoots;
+end;
+
+{ ---- structure panel ----------------------------------------------------- }
+
+function TfrmMain.CategoryOf(AKind: TGraphNodeKind): Integer;
+begin
+  case AKind of
+    nkClass, nkInterface, nkRecord, nkType: Result := 0;   { Types }
+    nkConst:                                 Result := 1;   { Consts }
+    nkVar:                                   Result := 2;   { Vars }
+    nkProcedure, nkFunction:                 Result := 3;   { Routines }
+  else
+    Result := 4;                                            { Other }
+  end;
+end;
+
+function TfrmMain.NewTag(AKind: TStructKind; const AGraphId, ASection: string;
+  ACat: Integer): TStructTag;
+begin
+  Result := TStructTag.Create;
+  Result.Kind    := AKind;
+  Result.GraphId := AGraphId;
+  Result.Section := ASection;
+  Result.Cat     := ACat;
+  FStructTags.Add(Result);
+end;
+
+procedure TfrmMain.ClearStructure;
+begin
+  FTree.Items.Clear;       { frees TTreeNodes; their .Data tags are owned by
+                             FStructTags and survive -- cleared next line }
+  FStructTags.Clear;
+end;
+
+procedure TfrmMain.BuildStructureRoots;
+var
+  I: Integer;
+  Units: TList<Integer>;
+  N: PGraphNode;
+  TN, Dummy: TTreeNode;
+begin
+  if (FVM = nil) or (FVM.Data = nil) then Exit;
+  ClearStructure;
+  FTree.Items.BeginUpdate;
+  try
+    Units := TList<Integer>.Create;
+    try
+      for I := 0 to FVM.Data.NodeCount - 1 do
+        if FVM.Data.NodeAt(I).Kind = nkUnit then
+          Units.Add(I);
+      { alphabetical by unit name }
+      Units.Sort(TComparer<Integer>.Construct(
+        function(const A, B: Integer): Integer
+        begin
+          Result := CompareText(FVM.Data.NodeAt(A).Label_,
+                                FVM.Data.NodeAt(B).Label_);
+        end));
+
+      for I in Units do
+      begin
+        N := FVM.Data.NodeAt(I);
+        TN := FTree.Items.AddChild(nil, N.Label_);
+        TN.Data := NewTag(skUnit, N.Id, '', 0);
+        Dummy := FTree.Items.AddChild(TN, '');   { lazy: expand to populate }
+        Dummy.Data := nil;
+      end;
+    finally
+      Units.Free;
+    end;
+  finally
+    FTree.Items.EndUpdate;
+  end;
+  FStructHdr.Caption := Format('  Structure  (%d units)', [FTree.Items.Count]);
+end;
+
+procedure TfrmMain.TreeExpanding(Sender: TObject; Node: TTreeNode;
+  var AllowExpansion: Boolean);
+const
+  CAT_NAMES: array[0..4] of string =
+    ('Types', 'Consts', 'Vars', 'Routines', 'Other');
+var
+  Tag, ChildTag: TStructTag;
+  UnitIdx, SymIdx, Ci, c: Integer;
+  Kids: TArray<Integer>;
+  M: PGraphNode;
+  Sect, Cap, Glyph: string;
+  HasIntf, HasImpl: Boolean;
+  CatCount: array[0..4] of Integer;
+  Order: TList<Integer>;
+  TN, Dummy: TTreeNode;
+
+  function SectOf(AIdx: Integer): string;
+  begin
+    Result := FVM.Data.NodeAt(AIdx).Section;
+    if Result = '' then Result := 'interface';
+  end;
+
+  function AddNode(const ACaption: string; ATag: TStructTag;
+    AExpandable: Boolean): TTreeNode;
+  begin
+    Result := FTree.Items.AddChild(Node, ACaption);
+    Result.Data := ATag;
+    if AExpandable then
+    begin
+      Dummy := FTree.Items.AddChild(Result, '');
+      Dummy.Data := nil;
+    end;
+  end;
+
+begin
+  AllowExpansion := True;
+  Tag := TStructTag(Node.Data);
+  if (Tag = nil) or Tag.Populated then Exit;
+  if FVM = nil then Exit;
+
+  { drop the lazy dummy child(ren) }
+  while Node.Count > 0 do Node.Item[0].Delete;
+  Tag.Populated := True;
+
+  case Tag.Kind of
+    skUnit:
+      begin
+        UnitIdx := FVM.Data.FindNodeIndex(Tag.GraphId);
+        if UnitIdx < 0 then Exit;
+        Kids := FVM.Data.ChildrenOf(UnitIdx);
+        HasIntf := False; HasImpl := False;
+        for Ci in Kids do
+          if SectOf(Ci) = 'implementation' then HasImpl := True
+          else HasIntf := True;
+        if HasIntf then
+          AddNode('Interface', NewTag(skSection, Tag.GraphId, 'interface', 0), True);
+        if HasImpl then
+          AddNode('Implementation', NewTag(skSection, Tag.GraphId, 'implementation', 0), True);
+      end;
+
+    skSection:
+      begin
+        UnitIdx := FVM.Data.FindNodeIndex(Tag.GraphId);
+        if UnitIdx < 0 then Exit;
+        Kids := FVM.Data.ChildrenOf(UnitIdx);
+        FillChar(CatCount, SizeOf(CatCount), 0);
+        for Ci in Kids do
+          if SectOf(Ci) = Tag.Section then
+            Inc(CatCount[CategoryOf(FVM.Data.NodeAt(Ci).Kind)]);
+        for c := 0 to 4 do
+          if CatCount[c] > 0 then
+            AddNode(Format('%s (%d)', [CAT_NAMES[c], CatCount[c]]),
+              NewTag(skCategory, Tag.GraphId, Tag.Section, c), True);
+      end;
+
+    skCategory:
+      begin
+        UnitIdx := FVM.Data.FindNodeIndex(Tag.GraphId);
+        if UnitIdx < 0 then Exit;
+        Kids := FVM.Data.ChildrenOf(UnitIdx);
+        Order := TList<Integer>.Create;
+        try
+          for Ci in Kids do
+            if (SectOf(Ci) = Tag.Section) and
+               (CategoryOf(FVM.Data.NodeAt(Ci).Kind) = Tag.Cat) then
+              Order.Add(Ci);
+          Order.Sort(TComparer<Integer>.Construct(
+            function(const A, B: Integer): Integer
+            begin
+              Result := CompareText(FVM.Data.NodeAt(A).Label_,
+                                    FVM.Data.NodeAt(B).Label_);
+            end));
+          for Ci in Order do
+          begin
+            M := FVM.Data.NodeAt(Ci);
+            Cap := M.Label_;
+            if (M.Kind = nkType) and (M.KindText <> '') then
+              Cap := Cap + '  : ' + M.KindText;
+            ChildTag := NewTag(skSymbol, M.Id, '', 0);
+            ChildTag.IsType := Length(FVM.Data.ChildrenOf(Ci)) > 0;
+            AddNode(Cap, ChildTag, ChildTag.IsType);
+          end;
+        finally
+          Order.Free;
+        end;
+      end;
+
+    skSymbol:
+      begin
+        SymIdx := FVM.Data.FindNodeIndex(Tag.GraphId);
+        if SymIdx < 0 then Exit;
+        Kids := FVM.Data.ChildrenOf(SymIdx);
+        Order := TList<Integer>.Create;
+        try
+          for Ci in Kids do Order.Add(Ci);
+          Order.Sort(TComparer<Integer>.Construct(
+            function(const A, B: Integer): Integer
+            var KA, KB: Integer;
+            begin
+              KA := Ord(FVM.Data.NodeAt(A).Kind);
+              KB := Ord(FVM.Data.NodeAt(B).Kind);
+              if KA <> KB then Exit(KA - KB);
+              Result := CompareText(FVM.Data.NodeAt(A).Label_,
+                                    FVM.Data.NodeAt(B).Label_);
+            end));
+          for Ci in Order do
+          begin
+            M := FVM.Data.NodeAt(Ci);
+            Glyph := VisibilityGlyph(M.Modifiers);
+            if Glyph <> '' then Glyph := Glyph + ' ';
+            Cap := Glyph + M.Label_;
+            if M.Signature <> '' then Cap := Cap + ': ' + M.Signature;
+            ChildTag := NewTag(skSymbol, M.Id, '', 0);
+            ChildTag.IsType := Length(FVM.Data.ChildrenOf(Ci)) > 0;
+            TN := AddNode(Cap, ChildTag, ChildTag.IsType);
+            if TN = nil then ;
+          end;
+        finally
+          Order.Free;
+        end;
+      end;
+  end;
+end;
+
+procedure TfrmMain.TreeChange(Sender: TObject; Node: TTreeNode);
+var
+  Tag: TStructTag;
+begin
+  if FSyncingTree or (Node = nil) or (FGraph = nil) then Exit;
+  Tag := TStructTag(Node.Data);
+  if (Tag = nil) or (Tag.GraphId = '') then Exit;
+  if not (Tag.Kind in [skUnit, skSymbol]) then Exit;
+  { Show the selected item in the graph (reveal + center). }
+  FSyncingTree := True;
+  try
+    FGraph.CenterOnNode(Tag.GraphId);
+  finally
+    FSyncingTree := False;
+  end;
 end;
 
 procedure TfrmMain.GraphViewChanged(Sender: TObject);
