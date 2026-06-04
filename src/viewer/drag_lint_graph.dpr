@@ -12,6 +12,7 @@ uses
   DragLint.Graph.Source   in '..\control\DragLint.Graph.Source.pas',
   DragLint.Graph.ViewModel in '..\control\DragLint.Graph.ViewModel.pas',
   DragLint.Graph.Source.Db in '..\control\DragLint.Graph.Source.Db.pas',
+  DragLint.Graph.UsesQuery in '..\control\DragLint.Graph.UsesQuery.pas',
   DragLint.Graph.OpenSourceClient in '..\control\DragLint.Graph.OpenSourceClient.pas',
   DragLint.Graph.Control  in '..\control\DragLint.Graph.Control.pas',
   MainForm                in 'MainForm.pas';

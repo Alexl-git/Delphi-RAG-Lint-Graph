@@ -18,6 +18,7 @@ uses
   DragLint.Graph.ViewModel,
   DragLint.Graph.Control,
   DragLint.Graph.Style,
+  DragLint.Graph.UsesQuery,
   DragLint.Graph.OpenSourceClient;
 
 const
@@ -26,7 +27,8 @@ const
 type
   { Structure-tree node descriptor (attached to each TTreeNode.Data).  The tree
     is lazy: each node knows just enough to populate its children on expand. }
-  TStructKind = (skUnit, skSection, skCategory, skSymbol);
+  TStructKind = (skUnit, skSection, skCategory, skSymbol,
+                 skUsesIntf, skUsesImpl, skUsedBy);
   TStructTag = class
     Kind:      TStructKind;
     GraphId:   string;    { unit id (skUnit/skSection/skCategory) or symbol id (skSymbol) }
@@ -402,7 +404,7 @@ const
     ('Types', 'Consts', 'Vars', 'Routines', 'Other');
 var
   Tag, ChildTag: TStructTag;
-  UnitIdx, SymIdx, Ci, c: Integer;
+  UnitIdx, SymIdx, Ci, c, Ui: Integer;
   Kids: TArray<Integer>;
   M: PGraphNode;
   Sect, Cap, Glyph: string;
@@ -410,6 +412,8 @@ var
   CatCount: array[0..4] of Integer;
   Order: TList<Integer>;
   TN, Dummy: TTreeNode;
+  UIntf, UImpl, UseArr: TArray<TUnitUseRow>;
+  UBy: TArray<string>;
 
   function SectOf(AIdx: Integer): string;
   begin
@@ -473,6 +477,45 @@ begin
           else if M.KindText = 'finalization' then
             AddNode('Finalization', NewTag(skSymbol, M.Id, '', 0), False);
         end;
+        { Uses-in / Used-by from the unit_uses table (exact, queried on demand). }
+        if Length(FDbPaths) > 0 then
+        begin
+          if QueryUnitUses(FDbPaths[0], Tag.GraphId, UIntf, UImpl, UBy) then
+          begin
+            if Length(UIntf) > 0 then
+              AddNode(Format('Uses - interface (%d)', [Length(UIntf)]),
+                NewTag(skUsesIntf, Tag.GraphId, '', 0), True);
+            if Length(UImpl) > 0 then
+              AddNode(Format('Uses - implementation (%d)', [Length(UImpl)]),
+                NewTag(skUsesImpl, Tag.GraphId, '', 0), True);
+            if Length(UBy) > 0 then
+              AddNode(Format('Used by (%d)', [Length(UBy)]),
+                NewTag(skUsedBy, Tag.GraphId, '', 0), True);
+          end;
+        end;
+      end;
+
+    skUsesIntf, skUsesImpl:
+      begin
+        if Length(FDbPaths) = 0 then Exit;
+        if not QueryUnitUses(FDbPaths[0], Tag.GraphId, UIntf, UImpl, UBy) then Exit;
+        if Tag.Kind = skUsesImpl then UseArr := UImpl else UseArr := UIntf;
+        for Ui := 0 to High(UseArr) do
+        begin
+          Cap := UseArr[Ui].UnitName;
+          if UseArr[Ui].External then Cap := Cap + '   (external)';
+          { leaf: skUnit tag -> clicking centers that unit in the graph if it
+            is in the loaded store (external/library units just no-op). }
+          AddNode(Cap, NewTag(skUnit, UseArr[Ui].UnitName, '', 0), False);
+        end;
+      end;
+
+    skUsedBy:
+      begin
+        if Length(FDbPaths) = 0 then Exit;
+        if not QueryUnitUses(FDbPaths[0], Tag.GraphId, UIntf, UImpl, UBy) then Exit;
+        for Ui := 0 to High(UBy) do
+          AddNode(UBy[Ui], NewTag(skUnit, UBy[Ui], '', 0), False);
       end;
 
     skSection:
