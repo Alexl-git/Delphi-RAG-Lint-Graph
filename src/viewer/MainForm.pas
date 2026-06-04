@@ -417,6 +417,13 @@ var
     if Result = '' then Result := 'interface';
   end;
 
+  function IsSectionMarker(AIdx: Integer): Boolean;
+  var KT: string;
+  begin
+    KT := FVM.Data.NodeAt(AIdx).KindText;
+    Result := (KT = 'initialization') or (KT = 'finalization');
+  end;
+
   function AddNode(const ACaption: string; ATag: TStructTag;
     AExpandable: Boolean): TTreeNode;
   begin
@@ -447,12 +454,25 @@ begin
         Kids := FVM.Data.ChildrenOf(UnitIdx);
         HasIntf := False; HasImpl := False;
         for Ci in Kids do
+        begin
+          if IsSectionMarker(Ci) then Continue;   { init/final shown separately }
           if SectOf(Ci) = 'implementation' then HasImpl := True
           else HasIntf := True;
+        end;
         if HasIntf then
           AddNode('Interface', NewTag(skSection, Tag.GraphId, 'interface', 0), True);
         if HasImpl then
           AddNode('Implementation', NewTag(skSection, Tag.GraphId, 'implementation', 0), True);
+        { initialization / finalization markers (v0.41 scanner) as their own
+          unit-level leaves -- click to jump to the section in the graph. }
+        for Ci in Kids do
+        begin
+          M := FVM.Data.NodeAt(Ci);
+          if M.KindText = 'initialization' then
+            AddNode('Initialization', NewTag(skSymbol, M.Id, '', 0), False)
+          else if M.KindText = 'finalization' then
+            AddNode('Finalization', NewTag(skSymbol, M.Id, '', 0), False);
+        end;
       end;
 
     skSection:
@@ -462,7 +482,7 @@ begin
         Kids := FVM.Data.ChildrenOf(UnitIdx);
         FillChar(CatCount, SizeOf(CatCount), 0);
         for Ci in Kids do
-          if SectOf(Ci) = Tag.Section then
+          if (SectOf(Ci) = Tag.Section) and not IsSectionMarker(Ci) then
             Inc(CatCount[CategoryOf(FVM.Data.NodeAt(Ci).Kind)]);
         for c := 0 to 4 do
           if CatCount[c] > 0 then
@@ -478,7 +498,7 @@ begin
         Order := TList<Integer>.Create;
         try
           for Ci in Kids do
-            if (SectOf(Ci) = Tag.Section) and
+            if (SectOf(Ci) = Tag.Section) and not IsSectionMarker(Ci) and
                (CategoryOf(FVM.Data.NodeAt(Ci).Kind) = Tag.Cat) then
               Order.Add(Ci);
           Order.Sort(TComparer<Integer>.Construct(
