@@ -1,5 +1,13 @@
 # Delphi-RAG-Lint-Graph
 
+> **⚠️ Early alpha / experimental — work in progress.** This is a young companion
+> to [Delphi-RAG-Lint](https://github.com/Alexl-git/Delphi-RAG-Lint), under active
+> daily development. Expect rough edges and breaking changes. Shared early so the
+> Delphi community can try it and shape it. **Feedback and suggestions are very
+> welcome** — please open an
+> [Issue](https://github.com/Alexl-git/Delphi-RAG-Lint-Graph/issues).
+> Not recommended for unattended/production use.
+
 Pure-VCL interactive graph viewer and reusable component for the
 [Delphi-RAG-Lint](https://github.com/Alexl-git/Delphi-RAG-Lint) symbol index.
 Reads the drag-lint SQLite DB(s) directly -- no WebView2, no HTML, no JS.
