@@ -1151,6 +1151,15 @@ begin
   N := FVM.Data.NodeAt(Idx);
   FOffsetX := N.X;       { FOffsetX/Y is the world point at screen center }
   FOffsetY := N.Y;
+  { NavigateTo -> HandleVMChanged -> EnsureLayout may have FitToWindow'd the
+    whole revealed set, leaving the zoom so far out the selected node is an
+    invisible dot.  Bring it to a readable zoom so the highlight is obviously
+    visible (only when currently zoomed too far out; keep a closer zoom). }
+  if FZoom < 0.9 then
+  begin
+    FZoom := 1.0;
+    if Assigned(FOnZoomChanged) then FOnZoomChanged(Self);
+  end;
   Invalidate;
   if Assigned(FOnZoomChanged)      then FOnZoomChanged(Self);
   if Assigned(FOnSelectionChange)  then FOnSelectionChange(Self);

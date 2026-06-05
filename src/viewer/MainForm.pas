@@ -75,6 +75,7 @@ type
     procedure TreeExpanding(Sender: TObject; Node: TTreeNode;
       var AllowExpansion: Boolean);
     procedure TreeChange(Sender: TObject; Node: TTreeNode);
+    procedure SelectTreeNodeById(const AId: string);
     function  CategoryOf(AKind: TGraphNodeKind): Integer;
     { Search }
     procedure SearchChanged(Sender: TObject);
@@ -266,11 +267,14 @@ begin
   FTree.OnContextPopup := TreeContextPopup;
 
   FSplitter := TSplitter.Create(Self);
-  FSplitter.Parent    := Self;
-  FSplitter.Align     := alLeft;
-  FSplitter.Width     := 5;
-  FSplitter.Color     := TColor($00505050);
-  FSplitter.MinSize   := 140;
+  FSplitter.Parent      := Self;
+  FSplitter.Align       := alLeft;        { sits at the panel's right edge }
+  FSplitter.Width       := 6;
+  FSplitter.Beveled     := True;          { visible grab strip }
+  FSplitter.Color       := TColor($00606060);
+  FSplitter.ParentColor := False;
+  FSplitter.MinSize     := 160;
+  FSplitter.ResizeStyle := rsUpdate;      { live drag }
 
   FGraph := TDragLintGraphControl.Create(Self);
   FGraph.Parent := Self;
@@ -999,6 +1003,34 @@ begin
   if N.FilePath <> '' then
     Info := Info + Format('  (%s:%d:%d)', [ExtractFileName(N.FilePath), N.Line, N.Col]);
   FStatus.SimpleText := Info;
+
+  { Graph -> tree: highlight the matching tree node if it is materialised
+    (best-effort; the tree is lazy so collapsed branches are not searched). }
+  SelectTreeNodeById(N.Id);
+end;
+
+procedure TfrmMain.SelectTreeNodeById(const AId: string);
+var
+  I: Integer;
+  Tag: TStructTag;
+begin
+  if FSyncingTree or (FTree = nil) or (AId = '') then Exit;
+  for I := 0 to FTree.Items.Count - 1 do
+  begin
+    Tag := TStructTag(FTree.Items[I].Data);
+    if (Tag <> nil) and (Tag.GraphId = AId) and
+       (Tag.Kind in [skUnit, skSymbol]) then
+    begin
+      FSyncingTree := True;
+      try
+        FTree.Items[I].MakeVisible;
+        FTree.Selected := FTree.Items[I];
+      finally
+        FSyncingTree := False;
+      end;
+      Exit;
+    end;
+  end;
 end;
 
 procedure TfrmMain.GraphOpenSource(Sender: TObject; ANode: PGraphNode);
