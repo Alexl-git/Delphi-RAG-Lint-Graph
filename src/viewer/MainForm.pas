@@ -7,10 +7,10 @@ unit MainForm;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.Math, System.UITypes,
+  System.SysUtils, System.Classes, System.Math, System.UITypes, System.StrUtils,
   System.Generics.Collections, System.Generics.Defaults,
   Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls,
-  Vcl.Graphics,
+  Vcl.Graphics, Vcl.Menus,
   Winapi.Windows, Winapi.Messages, Winapi.ShellAPI,
   DragLint.Graph.Types,
   DragLint.Graph.Source,
@@ -54,10 +54,19 @@ type
     { Structure panel (left dock) }
     FStructPanel: TPanel;
     FStructHdr:   TPanel;
+    FSearchEdit:  TEdit;
+    FPartialChk:  TCheckBox;
     FSplitter:    TSplitter;
     FTree:        TTreeView;
     FStructTags:  TObjectList<TStructTag>;
     FSyncingTree: Boolean;
+    { Tree right-click menu (mirrors the graph's context actions) }
+    FTreePopup:   TPopupMenu;
+    FMiTOpen:     TMenuItem;
+    FMiTGoto:     TMenuItem;
+    FMiTWhere:    TMenuItem;
+    FMiTCenter:   TMenuItem;
+    FTreeCtxId:   string;     { symbol id of the right-clicked tree node }
     procedure CreateControls;
     procedure BuildStructureRoots;
     procedure ClearStructure;
@@ -67,6 +76,18 @@ type
       var AllowExpansion: Boolean);
     procedure TreeChange(Sender: TObject; Node: TTreeNode);
     function  CategoryOf(AKind: TGraphNodeKind): Integer;
+    { Search }
+    procedure SearchChanged(Sender: TObject);
+    procedure DoSearch;
+    procedure BuildSearchResults(const ATerm: string; APartial: Boolean);
+    function  UnitNameOf(ANodeIdx: Integer): string;
+    { Tree context menu }
+    procedure TreeContextPopup(Sender: TObject; MousePos: TPoint;
+      var Handled: Boolean);
+    procedure TreeCtxOpen(Sender: TObject);
+    procedure TreeCtxGotoIntf(Sender: TObject);
+    procedure TreeCtxWhereUsed(Sender: TObject);
+    procedure TreeCtxCenter(Sender: TObject);
     procedure ParseDbArgs;
     procedure RunLoad;
     procedure FormShow(Sender: TObject);
@@ -193,6 +214,41 @@ begin
   FStructHdr.Alignment  := taLeftJustify;
   FStructHdr.Caption    := '  Structure';
 
+  { Search box (filters the tree to matching symbols). }
+  FSearchEdit := TEdit.Create(Self);
+  FSearchEdit.Parent    := FStructPanel;
+  FSearchEdit.Align     := alTop;
+  FSearchEdit.TextHint  := 'Search  (ABC, MSCTYPES.Plan, TPlanType.)';
+  FSearchEdit.OnChange  := SearchChanged;
+
+  FPartialChk := TCheckBox.Create(Self);
+  FPartialChk.Parent     := FStructPanel;
+  FPartialChk.Align      := alTop;
+  FPartialChk.Height     := 20;
+  FPartialChk.Caption    := 'Partial match (substring)';
+  FPartialChk.Checked    := True;
+  FPartialChk.Font.Color := clWhite;
+  FPartialChk.OnClick    := SearchChanged;
+
+  { Right-click menu mirroring the graph's context actions. }
+  FTreePopup := TPopupMenu.Create(Self);
+  FMiTOpen := TMenuItem.Create(FTreePopup);
+  FMiTOpen.Caption := 'Open Source';
+  FMiTOpen.OnClick := TreeCtxOpen;
+  FTreePopup.Items.Add(FMiTOpen);
+  FMiTGoto := TMenuItem.Create(FTreePopup);
+  FMiTGoto.Caption := 'Go to Interface';
+  FMiTGoto.OnClick := TreeCtxGotoIntf;
+  FTreePopup.Items.Add(FMiTGoto);
+  FMiTWhere := TMenuItem.Create(FTreePopup);
+  FMiTWhere.Caption := 'Where Used (focus)';
+  FMiTWhere.OnClick := TreeCtxWhereUsed;
+  FTreePopup.Items.Add(FMiTWhere);
+  FMiTCenter := TMenuItem.Create(FTreePopup);
+  FMiTCenter.Caption := 'Show in Graph (center)';
+  FMiTCenter.OnClick := TreeCtxCenter;
+  FTreePopup.Items.Add(FMiTCenter);
+
   FTree := TTreeView.Create(Self);
   FTree.Parent        := FStructPanel;
   FTree.Align         := alClient;
@@ -206,6 +262,8 @@ begin
   FTree.Font.Size     := 9;
   FTree.OnExpanding   := TreeExpanding;
   FTree.OnChange      := TreeChange;
+  FTree.PopupMenu     := FTreePopup;
+  FTree.OnContextPopup := TreeContextPopup;
 
   FSplitter := TSplitter.Create(Self);
   FSplitter.Parent    := Self;
@@ -617,6 +675,178 @@ begin
   finally
     FSyncingTree := False;
   end;
+end;
+
+{ ---- search ---- }
+
+procedure TfrmMain.SearchChanged(Sender: TObject);
+begin
+  DoSearch;
+end;
+
+procedure TfrmMain.DoSearch;
+var
+  Term: string;
+begin
+  if FVM = nil then Exit;
+  Term := Trim(FSearchEdit.Text);
+  if Term = '' then
+    BuildStructureRoots
+  else
+    BuildSearchResults(Term, FPartialChk.Checked);
+end;
+
+function TfrmMain.UnitNameOf(ANodeIdx: Integer): string;
+var
+  Idx, Guard: Integer;
+  N: PGraphNode;
+begin
+  Result := '';
+  Idx := ANodeIdx;
+  Guard := 0;
+  while (Idx >= 0) and (Guard < 64) do
+  begin
+    N := FVM.Data.NodeAt(Idx);
+    if N.Kind = nkUnit then Exit(N.Label_);
+    Idx := FVM.Data.ParentIndexOf(Idx);
+    Inc(Guard);
+  end;
+end;
+
+procedure TfrmMain.BuildSearchResults(const ATerm: string; APartial: Boolean);
+const
+  MAX_RESULTS = 1000;
+var
+  I, DotP: Integer;
+  Scope, Leaf, Cap, KindS: string;
+  N: PGraphNode;
+  Matches: TList<Integer>;
+  ScopeOk, LeafOk: Boolean;
+  TN: TTreeNode;
+  Capped: Boolean;
+begin
+  { "Unit.Type.leaf" -> scope = before last dot (matched against the qualified
+    name), leaf = after (matched against the symbol's own name).  No dot ->
+    match the name only.  Trailing dot -> everything in that scope. }
+  DotP := LastDelimiter('.', ATerm);
+  if DotP > 0 then
+  begin
+    Scope := Copy(ATerm, 1, DotP - 1);
+    Leaf  := Copy(ATerm, DotP + 1, MaxInt);
+  end
+  else
+  begin
+    Scope := '';
+    Leaf  := ATerm;
+  end;
+
+  ClearStructure;
+  Matches := TList<Integer>.Create;
+  Capped := False;
+  try
+    for I := 0 to FVM.Data.NodeCount - 1 do
+    begin
+      N := FVM.Data.NodeAt(I);
+      if (N.Kind = nkProject) or (N.Id = '@project') then Continue;
+
+      if Scope = '' then ScopeOk := True
+      else ScopeOk := ContainsText(N.Id, Scope);
+      if not ScopeOk then Continue;
+
+      if Leaf = '' then LeafOk := True
+      else if APartial then LeafOk := ContainsText(N.Label_, Leaf)
+      else LeafOk := SameText(N.Label_, Leaf);
+      if not LeafOk then Continue;
+
+      Matches.Add(I);
+      if Matches.Count >= MAX_RESULTS then begin Capped := True; Break; end;
+    end;
+
+    Matches.Sort(TComparer<Integer>.Construct(
+      function(const A, B: Integer): Integer
+      begin
+        Result := CompareText(FVM.Data.NodeAt(A).Label_,
+                              FVM.Data.NodeAt(B).Label_);
+        if Result = 0 then
+          Result := CompareText(FVM.Data.NodeAt(A).Id, FVM.Data.NodeAt(B).Id);
+      end));
+
+    FTree.Items.BeginUpdate;
+    try
+      for I in Matches do
+      begin
+        N := FVM.Data.NodeAt(I);
+        KindS := N.KindText;
+        if KindS = '' then KindS := '?';
+        Cap := N.Label_ + '   : ' + KindS + '   (' + UnitNameOf(I) + ')';
+        TN := FTree.Items.AddChild(nil, Cap);
+        TN.Data := NewTag(skSymbol, N.Id, '', 0);
+      end;
+    finally
+      FTree.Items.EndUpdate;
+    end;
+
+    if Capped then
+      FStructHdr.Caption := Format('  Search: %d+ results (capped)', [Matches.Count])
+    else
+      FStructHdr.Caption := Format('  Search: %d result(s)', [Matches.Count]);
+  finally
+    Matches.Free;
+  end;
+end;
+
+{ ---- tree context menu (mirrors the graph's right-click actions) ---- }
+
+procedure TfrmMain.TreeContextPopup(Sender: TObject; MousePos: TPoint;
+  var Handled: Boolean);
+var
+  Node: TTreeNode;
+  Tag:  TStructTag;
+  PN:   PGraphNode;
+begin
+  Handled := False;
+  if (MousePos.X < 0) or (MousePos.Y < 0) then
+    Node := FTree.Selected
+  else
+    Node := FTree.GetNodeAt(MousePos.X, MousePos.Y);
+  if Node = nil then begin Handled := True; Exit; end;
+
+  FTree.Selected := Node;     { also drives TreeChange -> graph selection }
+  Tag := TStructTag(Node.Data);
+  if (Tag = nil) or (Tag.GraphId = '') or
+     not (Tag.Kind in [skUnit, skSymbol]) then
+  begin
+    Handled := True;          { group node -> no menu }
+    Exit;
+  end;
+
+  FTreeCtxId := Tag.GraphId;
+  PN := FVM.Data.FindNode(FTreeCtxId);
+  FMiTOpen.Enabled := (PN <> nil) and (PN.FilePath <> '');
+end;
+
+procedure TfrmMain.TreeCtxOpen(Sender: TObject);
+var
+  PN: PGraphNode;
+begin
+  if FVM = nil then Exit;
+  PN := FVM.Data.FindNode(FTreeCtxId);
+  if PN <> nil then GraphOpenSource(Self, PN);
+end;
+
+procedure TfrmMain.TreeCtxGotoIntf(Sender: TObject);
+begin
+  if FGraph <> nil then FGraph.GoToInterfaceFor(FTreeCtxId);
+end;
+
+procedure TfrmMain.TreeCtxWhereUsed(Sender: TObject);
+begin
+  if FGraph <> nil then FGraph.WhereUsedFor(FTreeCtxId);
+end;
+
+procedure TfrmMain.TreeCtxCenter(Sender: TObject);
+begin
+  if FGraph <> nil then FGraph.CenterOnNode(FTreeCtxId);
 end;
 
 procedure TfrmMain.GraphViewChanged(Sender: TObject);

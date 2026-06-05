@@ -290,6 +290,10 @@ type
       tree item -> show it in the graph).  Selects it too, and pans so it is at
       the screen center.  No-op if the id is not a placed node. }
     procedure CenterOnNode(const AId: string);
+    { Context actions addressable by id, so the structure panel's right-click
+      menu invokes the SAME operations as the graph's own context menu. }
+    procedure WhereUsedFor(const AId: string);
+    procedure GoToInterfaceFor(const AId: string);
 
     { SetZoomLevel: clamps AZoom to [0.02, 20], re-anchors around the
       control center (world point at center stays fixed), then Invalidate.
@@ -1150,6 +1154,30 @@ begin
   Invalidate;
   if Assigned(FOnZoomChanged)      then FOnZoomChanged(Self);
   if Assigned(FOnSelectionChange)  then FOnSelectionChange(Self);
+end;
+
+procedure TDragLintGraphControl.WhereUsedFor(const AId: string);
+var
+  Idx: Integer;
+begin
+  if FVM = nil then Exit;
+  Idx := FVM.Data.FindNodeIndex(AId);
+  if Idx < 0 then Exit;
+  FVM.NavigateTo(AId);                 { reveal it first }
+  FContextNodeIdx := FVM.Data.FindNodeIndex(AId);
+  if FContextNodeIdx >= 0 then CtxWhereUsed(nil);
+end;
+
+procedure TDragLintGraphControl.GoToInterfaceFor(const AId: string);
+var
+  Idx: Integer;
+begin
+  if FVM = nil then Exit;
+  Idx := FVM.Data.FindNodeIndex(AId);
+  if Idx < 0 then Exit;
+  FVM.NavigateTo(AId);
+  FContextNodeIdx := FVM.Data.FindNodeIndex(AId);
+  if FContextNodeIdx >= 0 then CtxGotoInterface(nil);
 end;
 
 procedure TDragLintGraphControl.CtxFit(Sender: TObject);
