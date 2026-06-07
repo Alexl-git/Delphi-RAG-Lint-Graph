@@ -37,3 +37,5 @@ tests/autotest/results/
 # Stray build logs
 build_out.txt
 build_err.txt
+
+build/release-0.1.0/
