@@ -51,6 +51,7 @@ type
     FCatalog:    IDbCatalog;
     FDbPaths:    TArray<string>;
     FLoaded:     Boolean;
+    FParentHwnd: HWND;     { v0.43: when nonzero, embed as a WS_CHILD of this }
     { Structure panel (left dock) }
     FStructPanel: TPanel;
     FStructHdr:   TPanel;
@@ -110,6 +111,8 @@ type
       Middle (500) maps to ~1.0. }
     function  PosToZoom(APos: Integer): Double;
     function  ZoomToPos(AZoom: Double): Integer;
+  protected
+    procedure CreateParams(var Params: TCreateParams); override;
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -122,7 +125,35 @@ implementation
 
 { TfrmMain }
 
+// v0.43: pull the value following a named switch (e.g. '--parent-hwnd 1234').
+function GetParamValue(const AName: string): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 1 to ParamCount - 1 do
+    if SameText(ParamStr(I), AName) then
+      Exit(ParamStr(I + 1));
+end;
+
+procedure TfrmMain.CreateParams(var Params: TCreateParams);
+begin
+  inherited CreateParams(Params);
+  { v0.43 embed mode: become a borderless child of the host (the IDE plugin's
+    dockable Graph window) instead of a top-level window. }
+  if FParentHwnd <> 0 then
+  begin
+    Params.Style := (Params.Style and
+      not (WS_POPUP or WS_CAPTION or WS_THICKFRAME or WS_BORDER or WS_DLGFRAME))
+      or WS_CHILD;
+    Params.WndParent := FParentHwnd;
+    Params.ExStyle := Params.ExStyle and not WS_EX_APPWINDOW;
+  end;
+end;
+
 constructor TfrmMain.Create(AOwner: TComponent);
+var
+  HwndStr: string;
 begin
   inherited CreateNew(AOwner);
   Caption := 'drag-lint-graph viewer';
@@ -130,6 +161,24 @@ begin
   ClientWidth := 1100;
   ClientHeight := 700;
   FLoaded := False;
+
+  { v0.43: --parent-hwnd <HWND> embeds us in the IDE plugin's dock. Resolve it
+    BEFORE CreateControls -- the first child-control parenting realises the form
+    handle, which is when CreateParams reads FParentHwnd. }
+  HwndStr := GetParamValue('--parent-hwnd');
+  if HwndStr <> '' then
+  begin
+    FParentHwnd := HWND(StrToInt64Def(HwndStr, 0));
+    if FParentHwnd <> 0 then
+    begin
+      BorderStyle := bsNone;
+      BorderIcons := [];
+      Position    := poDesigned;
+      Left := 0;
+      Top  := 0;
+    end;
+  end;
+
   FStructTags := TObjectList<TStructTag>.Create(True);
   CreateControls;
   ParseDbArgs;
@@ -335,7 +384,10 @@ end;
 procedure TfrmMain.WMLoadGraph(var Msg: TMessage);
 begin
   RunLoad;
-  SetForegroundWindow(Handle);
+  { Standalone only -- yanking foreground while embedded would steal focus
+    from the IDE. }
+  if FParentHwnd = 0 then
+    SetForegroundWindow(Handle);
 end;
 
 procedure TfrmMain.RunLoad;
