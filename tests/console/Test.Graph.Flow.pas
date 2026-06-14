@@ -9,7 +9,11 @@ uses
   DragLint.Graph.TestFramework,
   DragLint.Graph.Types,
   DragLint.Graph.Flow,
-  Fake.FlowSource;
+  Fake.FlowSource,
+  DragLint.Graph.Source,
+  DragLint.Graph.Source.Db,
+  DragLint.Graph.Flow.Source.Db,
+  Test.Db.Fixtures;
 
 { Lifetime convention for these tests: the local `Fake: TFakeFlowSource` object
   is used only for setup (AddInfo/AddCall). It is then handed to the builder as
@@ -170,10 +174,52 @@ begin
   end;
 end;
 
+procedure Test_Flow_DbSource_RealFixture;
+var
+  DbPath: string;
+  Cat: IDbCatalog;
+  FlowSrc: IFlowSource;
+  B: TFlowBuilder;
+  T: TFlowTree;
+  Root, Child: Integer;
+begin
+  DbPath := CreateTempV6Db;
+  try
+    Cat := TDbCatalog.Create([DbPath]);
+    FlowSrc := TDbFlowSource.Create(Cat);
+    B := TFlowBuilder.Create(FlowSrc);
+    try
+      T := B.Build('U.TFoo.Bar');
+
+      Root := 0;
+      CheckEqualsStr('U.TFoo.Bar', T.Steps[Root].SymbolId, 'root = Bar');
+      Check(T.Steps[Root].Doc.HasDoc, 'Bar documented');
+      CheckEqualsStr('Hi', T.Steps[Root].Doc.Summary, 'Bar summary = Hi');
+      CheckEqualsInt(1, Length(T.Steps[Root].ChildIndices),
+        'Bar has one callee (MB; the type_use is not a call)');
+
+      Child := T.Steps[Root].ChildIndices[0];
+      CheckEqualsStr('U.TBaz.MB', T.Steps[Child].SymbolId, 'callee = MB');
+      CheckEqualsInt(12, T.Steps[Child].CallLine, 'MB called at line 12');
+      Check(not T.Steps[Child].Doc.HasDoc,
+        'MB undocumented (degradation path)');
+      CheckEqualsStr('procedure MB', T.Steps[Child].Signature,
+        'MB still shows its signature');
+    finally
+      B.Free;
+    end;
+    Cat := nil;
+    FlowSrc := nil;
+  finally
+    DeleteTempDb(DbPath);
+  end;
+end;
+
 initialization
   RegisterTest('Flow_OrderAndDedup',      Test_Flow_OrderAndDedup);
   RegisterTest('Flow_Recursion',          Test_Flow_Recursion);
   RegisterTest('Flow_DepthCap',           Test_Flow_DepthCap);
   RegisterTest('Flow_BreadthCap',         Test_Flow_BreadthCap);
   RegisterTest('Flow_DegradeAndExternal', Test_Flow_DegradeAndExternal);
+  RegisterTest('Flow_DbSource_RealFixture', Test_Flow_DbSource_RealFixture);
 end.

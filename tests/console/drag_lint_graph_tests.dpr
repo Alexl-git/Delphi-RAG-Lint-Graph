@@ -27,6 +27,7 @@ uses
   Test.Graph.LayoutF8 in 'Test.Graph.LayoutF8.pas',
   DragLint.Graph.Flow in '..\..\src\control\DragLint.Graph.Flow.pas',
   Fake.FlowSource in 'Fake.FlowSource.pas',
+  DragLint.Graph.Flow.Source.Db in '..\..\src\control\DragLint.Graph.Flow.Source.Db.pas',
   Test.Graph.Flow in 'Test.Graph.Flow.pas';
 
 begin
