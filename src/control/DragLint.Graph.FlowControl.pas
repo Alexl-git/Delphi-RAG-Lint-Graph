@@ -161,6 +161,9 @@ begin
        (S.TruncatedChildren = 0) and (not S.IsExternal) then
       L.Add('(no outgoing calls)');
 
+    { The "... N more" line MUST stay the LAST line appended when there is
+      truncation -- Relayout pins the clickable expand hit-rect to the last
+      line index. Do not append anything after this. }
     if S.TruncatedChildren > 0 then
       L.Add('  ... ' + IntToStr(S.TruncatedChildren) + ' more');
 

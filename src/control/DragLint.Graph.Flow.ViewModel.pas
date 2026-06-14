@@ -75,6 +75,14 @@ end;
 
 procedure TFlowViewModel.Rebuild;
 begin
+  { Defensive: Rebuild is only meaningful once a root is set. Before the first
+    SetRoot, FRootId is '' -- building from that yields an empty tree, so skip. }
+  if FRootId = '' then
+  begin
+    FHasTree := False;
+    Changed;
+    Exit;
+  end;
   FTree := FBuilder.Build(FRootId, FExpanded.Keys.ToArray);
   FHasTree := Length(FTree.Steps) > 0;
   Changed;
@@ -90,8 +98,11 @@ end;
 
 procedure TFlowViewModel.ToggleGlobalMode;
 begin
+  { A mode flip is display-only: it resets per-box detail overrides but
+    deliberately KEEPS expanded-truncation state (FExpanded) -- structural
+    expansion the user requested should survive a Brief<->Expanded toggle. }
   if FMode = fmBrief then FMode := fmExpanded else FMode := fmBrief;
-  FOverrides.Clear;   { a global flip resets per-box overrides }
+  FOverrides.Clear;
   Changed;
 end;
 

@@ -67,6 +67,9 @@ type
     FMaxDepth:   Integer;
     FMaxBreadth: Integer;
     FSteps:      TList<TFlowStep>;
+    { Per-Build scratch state (created/freed inside Build). Holds the set of
+      SymbolIds whose depth/breadth caps are lifted. Because it is instance
+      state, Build is NOT re-entrant -- call one Build at a time per builder. }
     FExpanded:   TDictionary<string, Boolean>;
     function DedupOrder(const ACallees: TArray<TFlowCallee>): TArray<TFlowCallee>;
     function AddExternal(const ACallee: TFlowCallee; ADepth: Integer): Integer;
