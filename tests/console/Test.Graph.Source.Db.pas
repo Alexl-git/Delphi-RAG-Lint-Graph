@@ -542,6 +542,8 @@ begin
         'GetCallees(Bar)[0].TargetQName = U.TBaz.MB');
       CheckEqualsInt(12, Calls[0].CallLine,
         'GetCallees(Bar)[0].CallLine = 12');
+      CheckEqualsStr('MB', Calls[0].RawName,
+        'GetCallees(Bar)[0].RawName = MB');
     end;
 
     { MB makes no calls. }
@@ -568,6 +570,7 @@ begin
       'GetSymbolMeta(Bar) = True');
     CheckEqualsStr('procedure Bar', Sig, 'GetSymbolMeta(Bar).Signature');
     CheckEqualsStr('method', KindText, 'GetSymbolMeta(Bar).KindText = method');
+    CheckEqualsStr('', Mods, 'GetSymbolMeta(Bar).Modifiers = empty');
 
     Check(not Src.GetSymbolMeta('No.Such', Sig, Mods, KindText),
       'GetSymbolMeta(missing) = False');

@@ -25,7 +25,7 @@ type
       first-hit match; returns False (AQName := '') when nothing found.
       Must NOT call LoadTopology -- runs a single indexed SELECT per store. }
     function ResolveName(const AName: string; out AQName: string): Boolean;
-    { Direct callees of ASymbolId, ordered by call-site line. Only refs whose
+    { Direct callees of AQName, ordered by call-site line. Only refs whose
       innermost enclosing symbol IS ASymbolId are returned (nested symbols are
       not double-counted). Unresolved calls have TargetQName=''. May contain
       duplicate targets (caller de-duplicates). Single indexed query. }

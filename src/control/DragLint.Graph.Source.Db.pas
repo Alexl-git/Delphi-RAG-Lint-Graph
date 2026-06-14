@@ -1001,7 +1001,7 @@ begin
         'SELECT r.start_line AS cl, r.name_text AS nm, t.qualified_name AS tq ' +
         'FROM refs r ' +
         'JOIN symbols src ON src.qualified_name = :q ' +
-        'JOIN symbols t   ON t.id = r.symbol_id ' +
+        'LEFT JOIN symbols t ON t.id = r.symbol_id ' +
         'WHERE r.kind = ''call'' ' +
         '  AND r.file_id = src.file_id ' +
         '  AND r.start_line BETWEEN src.start_line AND src.end_line ' +
@@ -1049,7 +1049,7 @@ begin
       'WHERE qualified_name = :q LIMIT 1';
     Q.ParamByName('q').AsString := AQName;
     Q.Open;
-    if not Q.Eof then
+    if not Q.IsEmpty then
     begin
       ASignature := Q.FieldByName('signature').AsString;
       AModifiers := Q.FieldByName('modifiers').AsString;
