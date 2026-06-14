@@ -80,7 +80,6 @@ type
     FFlowBtn:     TButton;     { returns to graph }
     FModeBtn:     TButton;     { Brief <-> Expanded }
     FMiTFlow:     TMenuItem;   { "Trace flow from here" }
-    FInFlow:      Boolean;
     procedure FlowBtnClick(Sender: TObject);
     procedure ModeBtnClick(Sender: TObject);
     procedure StartFlowFrom(const ASymbolId: string);
@@ -207,9 +206,12 @@ end;
 destructor TfrmMain.Destroy;
 begin
   { Flow VM/builder/source are NOT owned by the form -- free them here, before
-    inherited.  FFlowControl is form-owned and freed during inherited; freeing
-    FFlowVM first is safe because the control only touches the VM on user
-    interaction, which cannot occur during teardown. }
+    inherited.  FFlowControl is form-owned and freed during inherited, and its
+    destructor clears the VM's OnChanged -- so we must detach the control from
+    the VM (Attach(nil) nils both sides) BEFORE freeing the VM, or the control's
+    destructor would write through a dangling pointer. }
+  if FFlowControl <> nil then
+    FFlowControl.Attach(nil);
   FFlowVM.Free;
   FFlowBuilder.Free;
   FFlowSource := nil;
@@ -991,7 +993,6 @@ begin
   end;
   FFlowVM.SetRoot(ASymbolId);
 
-  FInFlow := True;
   FFlowControl.Visible := True;
   FFlowControl.BringToFront;
   FGraph.Visible := False;
@@ -1003,7 +1004,6 @@ end;
 
 procedure TfrmMain.FlowBtnClick(Sender: TObject);
 begin
-  FInFlow := False;
   FFlowControl.Visible := False;
   FGraph.Visible := True;
   FGraph.BringToFront;
