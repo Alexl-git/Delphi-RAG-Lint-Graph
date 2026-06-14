@@ -79,6 +79,8 @@ type
     FFlowSource:  IFlowSource;
     FFlowBtn:     TButton;     { returns to graph }
     FModeBtn:     TButton;     { Brief <-> Expanded }
+    FEnterFlowBtn: TButton;    { enter flow from the selected graph node }
+    FSelectedGraphId: string;  { id of the currently selected graph node }
     FMiTFlow:     TMenuItem;   { "Trace flow from here" }
     procedure FlowBtnClick(Sender: TObject);
     procedure ModeBtnClick(Sender: TObject);
@@ -114,6 +116,8 @@ type
     procedure WMLoadGraph(var Msg: TMessage); message WM_LOADGRAPH;
     procedure GraphNodeClick(Sender: TObject; const A: TGraphNodeEventArgs);
     procedure GraphSelectionChanged(Sender: TObject);
+    procedure GraphTraceFlow(Sender: TObject; const AId: string);
+    procedure EnterFlowBtnClick(Sender: TObject);
     procedure GraphOpenSource(Sender: TObject; ANode: PGraphNode);
     procedure GraphCrossDbJump(Sender: TObject; const AName: string);
     procedure GraphViewChanged(Sender: TObject);
@@ -364,6 +368,7 @@ begin
   FGraph.OnSelectionChange := GraphSelectionChanged;
   FGraph.OnOpenSource   := GraphOpenSource;
   FGraph.OnCrossDbJump  := GraphCrossDbJump;
+  FGraph.OnTraceFlow    := GraphTraceFlow;
   FGraph.OnViewChanged  := GraphViewChanged;
   FGraph.OnZoomChanged  := GraphZoomChanged;
 
@@ -412,6 +417,21 @@ begin
   FModeBtn.Caption := 'Brief';
   FModeBtn.Visible := False;
   FModeBtn.OnClick := ModeBtnClick;
+
+  { "Flow" button -- enters Code-Flow view from the currently selected graph
+    node.  Same top-right idiom as FFlowBtn; shares FFlowBtn's slot since the
+    two are never visible together (this shows in graph mode, FFlowBtn in flow
+    mode).  Visible by default. }
+  FEnterFlowBtn := TButton.Create(Self);
+  FEnterFlowBtn.Parent  := Self;
+  FEnterFlowBtn.Anchors := [akTop, akRight];
+  FEnterFlowBtn.Width   := 70;
+  FEnterFlowBtn.Height  := 26;
+  FEnterFlowBtn.Top     := 4;
+  FEnterFlowBtn.Left    := FShowAllBtn.Left - FEnterFlowBtn.Width - MARGIN;
+  FEnterFlowBtn.Caption := 'Flow';
+  FEnterFlowBtn.Visible := True;
+  FEnterFlowBtn.OnClick := EnterFlowBtnClick;
 end;
 
 procedure TfrmMain.ParseDbArgs;
@@ -979,9 +999,23 @@ begin
     StartFlowFrom(FTreeCtxId);
 end;
 
+procedure TfrmMain.GraphTraceFlow(Sender: TObject; const AId: string);
+begin
+  if AId <> '' then
+    StartFlowFrom(AId);
+end;
+
+procedure TfrmMain.EnterFlowBtnClick(Sender: TObject);
+begin
+  if FSelectedGraphId <> '' then
+    StartFlowFrom(FSelectedGraphId)
+  else
+    FStatus.SimpleText := 'Select a graph node first, then click Flow.';
+end;
+
 procedure TfrmMain.StartFlowFrom(const ASymbolId: string);
 begin
-  if FCatalog = nil then Exit;
+  if (FCatalog = nil) or (ASymbolId = '') then Exit;
   if FFlowSource = nil then
     FFlowSource := TDbFlowSource.Create(FCatalog);
   if FFlowBuilder = nil then
@@ -996,6 +1030,7 @@ begin
   FFlowControl.Visible := True;
   FFlowControl.BringToFront;
   FGraph.Visible := False;
+  FEnterFlowBtn.Visible := False;
   FFlowBtn.Visible := True;
   FModeBtn.Visible := True;
   UpdateModeButton;
@@ -1007,6 +1042,7 @@ begin
   FFlowControl.Visible := False;
   FGraph.Visible := True;
   FGraph.BringToFront;
+  FEnterFlowBtn.Visible := True;
   FFlowBtn.Visible := False;
   FModeBtn.Visible := False;
   FStatus.SimpleText := '';
@@ -1140,6 +1176,7 @@ begin
   { Fires for every node click (the control's primary action -- expand or
     open-source -- runs after this and may overwrite the status text). }
   if A.Node = nil then Exit;
+  FSelectedGraphId := A.Node.Id;   { remembered for the toolbar "Flow" button }
   Info := 'Selected: ' + A.Node.Id;
   if A.Node.FilePath <> '' then
     Info := Info + Format('  (%s:%d)', [ExtractFileName(A.Node.FilePath), A.Node.Line]);
@@ -1158,8 +1195,13 @@ var
 begin
   if FVM = nil then Exit;
   Idx := FVM.SelectedNodeIndex;
-  if Idx < 0 then Exit;
+  if Idx < 0 then
+  begin
+    FSelectedGraphId := '';   { selection cleared -> "Flow" has no target }
+    Exit;
+  end;
   N := FVM.Data.NodeAt(Idx);
+  FSelectedGraphId := N.Id;
   case N.Kind of
     nkUnit:      Kind := 'Unit';
     nkClass:     Kind := 'Class';

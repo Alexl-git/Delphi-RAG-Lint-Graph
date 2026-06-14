@@ -174,6 +174,7 @@ type
     FMiWhereUsed:    TMenuItem;
     FMiGotoIntf:     TMenuItem;
     FMiCenter:       TMenuItem;
+    FMiTraceFlow:    TMenuItem;
     FMiSep:          TMenuItem;
     FMiFit:          TMenuItem;
     FMiBack:         TMenuItem;
@@ -196,6 +197,7 @@ type
     FOnSelectionChange: TNotifyEvent;
     FOnOpenSource:      TGraphOpenSourceEvent;
     FOnCrossDbJump:     TGraphNameEvent;
+    FOnTraceFlow:       TGraphIdEvent;
     FOnViewChanged:     TNotifyEvent;
     FOnZoomChanged:     TNotifyEvent;
 
@@ -241,6 +243,7 @@ type
     procedure CtxWhereUsed(Sender: TObject);
     procedure CtxGotoInterface(Sender: TObject);
     procedure CtxCenter(Sender: TObject);
+    procedure CtxTraceFlow(Sender: TObject);
     procedure CtxFit(Sender: TObject);
     procedure CtxBack(Sender: TObject);
     { Go up one level: drill-up if drilled, else un-show-all, else VM Back.
@@ -335,6 +338,10 @@ type
                                                        write FOnOpenSource;
     property OnCrossDbJump:      TGraphNameEvent  read FOnCrossDbJump
                                                   write FOnCrossDbJump;
+    { Fired by the "Trace flow from here" context item with the right-clicked
+      node's id, so the host can enter Code-Flow view rooted at that symbol. }
+    property OnTraceFlow:        TGraphIdEvent    read FOnTraceFlow
+                                                  write FOnTraceFlow;
     { Fired after VM state changes (collapse/focus/select/nav/store/show-all).
       Host can use this to refresh UI elements that read VM counts. }
     property OnViewChanged:      TNotifyEvent     read FOnViewChanged
@@ -427,6 +434,11 @@ begin
   FMiCenter.Caption := 'Center Here';
   FMiCenter.OnClick := CtxCenter;
   FPopup.Items.Add(FMiCenter);
+
+  FMiTraceFlow := TMenuItem.Create(FPopup);
+  FMiTraceFlow.Caption := 'Trace flow from here';
+  FMiTraceFlow.OnClick := CtxTraceFlow;
+  FPopup.Items.Add(FMiTraceFlow);
 
   { Canvas-level items -- always shown, so a right-click never does "nothing"
     even on empty space or a node the cursor narrowly missed. }
@@ -1042,6 +1054,7 @@ begin
   FMiGotoIntf.Visible  := FContextNodeIdx >= 0;
   FMiWhereUsed.Visible := FContextNodeIdx >= 0;
   FMiCenter.Visible    := FContextNodeIdx >= 0;
+  FMiTraceFlow.Visible := FContextNodeIdx >= 0;
   FMiSep.Visible       := FContextNodeIdx >= 0;
   FMiBack.Enabled      := (FVM <> nil) and
     ((Length(FVM.DrillPath) > 0) or FVM.ShowAllTopLevel or FVM.CanGoBack);
@@ -1134,6 +1147,16 @@ begin
   FOffsetY := N.Y;
   Invalidate;
   if Assigned(FOnZoomChanged) then FOnZoomChanged(Self);
+end;
+
+procedure TDragLintGraphControl.CtxTraceFlow(Sender: TObject);
+var
+  N: PGraphNode;
+begin
+  if (FVM = nil) or (FContextNodeIdx < 0) then Exit;
+  N := FVM.Data.NodeAt(FContextNodeIdx);
+  if Assigned(FOnTraceFlow) and (N.Id <> '') then
+    FOnTraceFlow(Self, N.Id);
 end;
 
 procedure TDragLintGraphControl.CenterOnNode(const AId: string);
