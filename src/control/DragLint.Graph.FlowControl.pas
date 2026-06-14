@@ -17,6 +17,7 @@ uses
   DragLint.Graph.Flow.ViewModel;
 
 type
+  /// <summary>Callback raised when the user clicks a resolved flow box; ASymbolId is the qualified name.</summary>
   TFlowSymbolEvent = procedure(Sender: TObject; const ASymbolId: string) of object;
 
   /// <summary>Renders a TFlowViewModel as a scrollable vertical flowchart and
@@ -36,9 +37,13 @@ type
     function  BoxLines(AIndex: Integer): TArray<string>;
     procedure Relayout;
   public
+    /// <summary>Creates the control and its inner TPaintBox; call Attach before use.</summary>
     constructor Create(AOwner: TComponent); override;
+    /// <summary>Detaches from the VM and frees layout lists.</summary>
     destructor Destroy; override;
+    /// <summary>Binds this control to AVM; replaces any previous binding.</summary>
     procedure Attach(AVM: TFlowViewModel);
+    /// <summary>Fired when the user selects a resolved flow box (not external).</summary>
     property OnSelectSymbol: TFlowSymbolEvent read FOnSelect write FOnSelect;
   end;
 

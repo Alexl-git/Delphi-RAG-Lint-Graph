@@ -24,8 +24,11 @@ type
     function StoreThatHas(const AQName: string;
       out ASrc: IGraphSource): Boolean;
   public
+    /// <summary>Creates a source backed by ACatalog (all stores, priority order).</summary>
     constructor Create(const ACatalog: IDbCatalog);
+    /// <summary>Returns all direct callees of ASymbolId from the first store that declares it.</summary>
     function GetCallees(const ASymbolId: string): TArray<TFlowCallee>;
+    /// <summary>Returns signature, kind and doc for ASymbolId from the first owning store.</summary>
     function GetInfo(const ASymbolId: string): TFlowInfo;
   end;
 

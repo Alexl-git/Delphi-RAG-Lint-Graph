@@ -72,8 +72,10 @@ type
     function AddStep(const AId: string; ADepth, ACallLine: Integer;
       const AAncestors: TArray<string>): Integer;
   public
+    /// <summary>Creates a builder using ASource; defaults: max depth 6, max breadth 12.</summary>
     constructor Create(const ASource: IFlowSource;
       AMaxDepth: Integer = 6; AMaxBreadth: Integer = 12);
+    /// <summary>Builds and returns the flow tree rooted at ARootId.</summary>
     function Build(const ARootId: string): TFlowTree;
   end;
 

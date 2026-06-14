@@ -13,6 +13,7 @@ uses
   DragLint.Graph.Flow;
 
 type
+  /// <summary>Display granularity: fmBrief shows signature only; fmExpanded shows full doc.</summary>
   TFlowMode = (fmBrief, fmExpanded);
 
   /// <summary>Holds the built flow tree plus view state. Build a tree with
@@ -30,9 +31,13 @@ type
   public
     constructor Create(ABuilder: TFlowBuilder);
     destructor Destroy; override;
+    /// <summary>Builds a new flow tree from ARootId and notifies observers.</summary>
     procedure SetRoot(const ARootId: string);
+    /// <summary>Flips between fmBrief and fmExpanded, clearing per-box overrides.</summary>
     procedure ToggleGlobalMode;
+    /// <summary>Inverts the expanded state of the box at AStepIndex.</summary>
     procedure ToggleBox(AStepIndex: Integer);
+    /// <summary>Returns True if AStepIndex should be rendered expanded (mode + override).</summary>
     function  EffectiveExpanded(AStepIndex: Integer): Boolean;
     property  Tree: TFlowTree read FTree;
     property  HasTree: Boolean read FHasTree;
