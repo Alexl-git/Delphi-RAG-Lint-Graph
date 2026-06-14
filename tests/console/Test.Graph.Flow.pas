@@ -191,7 +191,7 @@ begin
     try
       T := B.Build('U.TFoo.Bar');
 
-      Root := 0;
+      Root := 0;   { root is always step 0 by the engine's parent-before-children contract }
       CheckEqualsStr('U.TFoo.Bar', T.Steps[Root].SymbolId, 'root = Bar');
       Check(T.Steps[Root].Doc.HasDoc, 'Bar documented');
       CheckEqualsStr('Hi', T.Steps[Root].Doc.Summary, 'Bar summary = Hi');

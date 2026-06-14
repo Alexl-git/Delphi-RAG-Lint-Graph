@@ -43,7 +43,10 @@ var
   I: Integer;
   Sig, Mods, KindText: string;
 begin
-  { First store whose symbols table contains AQName (priority order). }
+  { First store whose symbols table contains AQName (priority order).
+    Sig/Mods/KindText are discarded -- GetSymbolMeta is used here only as a
+    presence probe. (GetCallees needs only the store; GetInfo runs its own
+    single GetSymbolMeta to capture the meta -- see below.) }
   for I := 0 to FCatalog.StoreCount - 1 do
   begin
     ASrc := FCatalog.SourceForStore(I);
@@ -75,17 +78,25 @@ end;
 
 function TDbFlowSource.GetInfo(const ASymbolId: string): TFlowInfo;
 var
+  I: Integer;
   Src: IGraphSource;
   Sig, Mods, KindText: string;
 begin
+  { Inline the store-priority scan (rather than calling StoreThatHas) so the
+    presence probe and the meta capture are a SINGLE GetSymbolMeta per store,
+    not two. This runs once per flow node, so the saved query matters. }
   Result := Default(TFlowInfo);
-  if not StoreThatHas(ASymbolId, Src) then Exit;
-  if Src.GetSymbolMeta(ASymbolId, Sig, Mods, KindText) then
+  for I := 0 to FCatalog.StoreCount - 1 do
   begin
-    Result.Found     := True;
-    Result.Signature := Sig;
-    Result.KindText  := KindText;
-    Result.Doc       := Src.GetDoc(ASymbolId);
+    Src := FCatalog.SourceForStore(I);
+    if (Src <> nil) and Src.GetSymbolMeta(ASymbolId, Sig, Mods, KindText) then
+    begin
+      Result.Found     := True;
+      Result.Signature := Sig;
+      Result.KindText  := KindText;
+      Result.Doc       := Src.GetDoc(ASymbolId);
+      Exit;
+    end;
   end;
 end;
 
