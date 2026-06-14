@@ -24,7 +24,10 @@ uses
   DragLint.Graph.OpenSourceClient in '..\..\src\control\DragLint.Graph.OpenSourceClient.pas',
   Test.Graph.OpenSource in 'Test.Graph.OpenSource.pas',
   DragLint.Graph.Layout in '..\..\src\control\DragLint.Graph.Layout.pas',
-  Test.Graph.LayoutF8 in 'Test.Graph.LayoutF8.pas';
+  Test.Graph.LayoutF8 in 'Test.Graph.LayoutF8.pas',
+  DragLint.Graph.Flow in '..\..\src\control\DragLint.Graph.Flow.pas',
+  Fake.FlowSource in 'Fake.FlowSource.pas',
+  Test.Graph.Flow in 'Test.Graph.Flow.pas';
 
 begin
   WriteLn('drag-lint-graph console tests');
