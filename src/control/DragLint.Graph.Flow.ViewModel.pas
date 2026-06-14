@@ -9,7 +9,7 @@ unit DragLint.Graph.Flow.ViewModel;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.Generics.Collections,
+  System.Classes, System.Generics.Collections,
   DragLint.Graph.Flow;
 
 type
