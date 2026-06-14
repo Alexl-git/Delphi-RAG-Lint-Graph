@@ -11,6 +11,17 @@ uses
   DragLint.Graph.Flow,
   Fake.FlowSource;
 
+{ Lifetime convention for these tests: the local `Fake: TFakeFlowSource` object
+  is used only for setup (AddInfo/AddCall). It is then handed to the builder as
+  `Fake as IFlowSource`, which holds the only counted reference; when `B.Free`
+  drops the builder, that reference releases and frees the fake. Do NOT call
+  Fake.Free, and do NOT touch `Fake` after `B.Free` -- it is a dangling pointer
+  at that point. }
+
+{ Returns the index of the first NON-recursion step whose SymbolId = AId, or -1.
+  Recursion markers (re-visited ancestors) are skipped so callers can ask
+  "is this symbol present as a real, expandable step?". External steps have an
+  empty SymbolId and so never match a non-empty AId. }
 function StepById(const T: TFlowTree; const AId: string): Integer;
 var I: Integer;
 begin

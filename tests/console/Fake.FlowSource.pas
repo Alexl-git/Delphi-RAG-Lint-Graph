@@ -88,7 +88,7 @@ end;
 function TFakeFlowSource.GetInfo(const ASymbolId: string): TFlowInfo;
 begin
   if not FInfos.TryGetValue(ASymbolId, Result) then
-    FillChar(Result, SizeOf(Result), 0);
+    Result := Default(TFlowInfo);   { managed record -- never FillChar }
 end;
 
 end.
