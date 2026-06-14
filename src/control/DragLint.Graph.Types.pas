@@ -92,6 +92,14 @@ type
     Weight:   Double;       { for spring strength; default 1.0 }
   end;
 
+  { One outgoing call from a symbol body to a callee. Returned by
+    IGraphSource.GetCallees; the flow engine maps it to a TFlowCallee. }
+  TCallRef = record
+    TargetQName: string;   { resolved callee qualified_name ('' if unresolved) }
+    RawName:     string;   { refs.name_text as written (label for unresolved) }
+    CallLine:    Integer;  { refs.start_line -- call-site line in the caller }
+  end;
+
   TDocParam = record
     Name: string;
     Desc: string;

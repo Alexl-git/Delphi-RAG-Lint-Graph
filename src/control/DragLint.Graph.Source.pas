@@ -25,6 +25,15 @@ type
       first-hit match; returns False (AQName := '') when nothing found.
       Must NOT call LoadTopology -- runs a single indexed SELECT per store. }
     function ResolveName(const AName: string; out AQName: string): Boolean;
+    { Direct callees of AQName, ordered by call-site line. Only refs whose
+      innermost enclosing symbol IS ASymbolId are returned (nested symbols are
+      not double-counted). Unresolved calls have TargetQName=''. May contain
+      duplicate targets (caller de-duplicates). Single indexed query. }
+    function GetCallees(const AQName: string): TArray<TCallRef>;
+    { Signature + modifiers + raw kind text for one symbol. False if absent.
+      Used by the flow engine for the box header / degradation path. }
+    function GetSymbolMeta(const AQName: string;
+      out ASignature, AModifiers, AKindText: string): Boolean;
   end;
 
   IDbCatalog = interface
