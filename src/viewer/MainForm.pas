@@ -19,7 +19,11 @@ uses
   DragLint.Graph.Control,
   DragLint.Graph.Style,
   DragLint.Graph.UsesQuery,
-  DragLint.Graph.OpenSourceClient;
+  DragLint.Graph.OpenSourceClient,
+  DragLint.Graph.Flow,
+  DragLint.Graph.Flow.Source.Db,
+  DragLint.Graph.Flow.ViewModel,
+  DragLint.Graph.FlowControl;
 
 const
   WM_LOADGRAPH = WM_USER + 100;
@@ -68,6 +72,21 @@ type
     FMiTWhere:    TMenuItem;
     FMiTCenter:   TMenuItem;
     FTreeCtxId:   string;     { symbol id of the right-clicked tree node }
+    { Flow mode: traces the call flow from a chosen symbol; overlays the graph. }
+    FFlowControl: TFlowChartControl;
+    FFlowVM:      TFlowViewModel;
+    FFlowBuilder: TFlowBuilder;
+    FFlowSource:  IFlowSource;
+    FFlowBtn:     TButton;     { returns to graph }
+    FModeBtn:     TButton;     { Brief <-> Expanded }
+    FMiTFlow:     TMenuItem;   { "Trace flow from here" }
+    FInFlow:      Boolean;
+    procedure FlowBtnClick(Sender: TObject);
+    procedure ModeBtnClick(Sender: TObject);
+    procedure StartFlowFrom(const ASymbolId: string);
+    procedure FlowSelected(Sender: TObject; const ASymbolId: string);
+    procedure TreeCtxFlow(Sender: TObject);
+    procedure UpdateModeButton;
     procedure CreateControls;
     procedure BuildStructureRoots;
     procedure ClearStructure;
@@ -187,6 +206,13 @@ end;
 
 destructor TfrmMain.Destroy;
 begin
+  { Flow VM/builder/source are NOT owned by the form -- free them here, before
+    inherited.  FFlowControl is form-owned and freed during inherited; freeing
+    FFlowVM first is safe because the control only touches the VM on user
+    interaction, which cannot occur during teardown. }
+  FFlowVM.Free;
+  FFlowBuilder.Free;
+  FFlowSource := nil;
   FStructTags.Free;
   inherited;
 end;
@@ -298,6 +324,10 @@ begin
   FMiTCenter.Caption := 'Show in Graph (center)';
   FMiTCenter.OnClick := TreeCtxCenter;
   FTreePopup.Items.Add(FMiTCenter);
+  FMiTFlow := TMenuItem.Create(FTreePopup);
+  FMiTFlow.Caption := 'Trace flow from here';
+  FMiTFlow.OnClick := TreeCtxFlow;
+  FTreePopup.Items.Add(FMiTFlow);
 
   FTree := TTreeView.Create(Self);
   FTree.Parent        := FStructPanel;
@@ -346,6 +376,40 @@ begin
   FShowAllBtn.Caption := '';
   FShowAllBtn.Visible := False;
   FShowAllBtn.OnClick := ShowAllBtnClick;
+
+  { Flow control: same region/alignment as the graph (parent Self, alClient).
+    Created AFTER FGraph so its z-order is above; toggling Visible swaps which
+    of the two fills the client area between the structure dock and zoom bar. }
+  FFlowControl := TFlowChartControl.Create(Self);
+  FFlowControl.Parent  := FGraph.Parent;
+  FFlowControl.Align   := FGraph.Align;
+  FFlowControl.Visible := False;
+  FFlowControl.OnSelectSymbol := FlowSelected;
+
+  { "Back to Graph" and "Brief/Expanded" buttons -- top-right toolbar idiom,
+    mirroring FShowAllBtn (parent Self, [akTop, akRight]).  Placed to the left
+    of FShowAllBtn; hidden until flow mode is entered. }
+  FFlowBtn := TButton.Create(Self);
+  FFlowBtn.Parent  := Self;
+  FFlowBtn.Anchors := [akTop, akRight];
+  FFlowBtn.Width   := 110;
+  FFlowBtn.Height  := 26;
+  FFlowBtn.Top     := 4;
+  FFlowBtn.Left    := FShowAllBtn.Left - FFlowBtn.Width - MARGIN;
+  FFlowBtn.Caption := 'Back to Graph';
+  FFlowBtn.Visible := False;
+  FFlowBtn.OnClick := FlowBtnClick;
+
+  FModeBtn := TButton.Create(Self);
+  FModeBtn.Parent  := Self;
+  FModeBtn.Anchors := [akTop, akRight];
+  FModeBtn.Width   := 80;
+  FModeBtn.Height  := 26;
+  FModeBtn.Top     := 4;
+  FModeBtn.Left    := FFlowBtn.Left - FModeBtn.Width - MARGIN;
+  FModeBtn.Caption := 'Brief';
+  FModeBtn.Visible := False;
+  FModeBtn.OnClick := ModeBtnClick;
 end;
 
 procedure TfrmMain.ParseDbArgs;
@@ -903,6 +967,71 @@ end;
 procedure TfrmMain.TreeCtxCenter(Sender: TObject);
 begin
   if FGraph <> nil then FGraph.CenterOnNode(FTreeCtxId);
+end;
+
+{ ---- flow mode ---------------------------------------------------------- }
+
+procedure TfrmMain.TreeCtxFlow(Sender: TObject);
+begin
+  if FTreeCtxId <> '' then
+    StartFlowFrom(FTreeCtxId);
+end;
+
+procedure TfrmMain.StartFlowFrom(const ASymbolId: string);
+begin
+  if FCatalog = nil then Exit;
+  if FFlowSource = nil then
+    FFlowSource := TDbFlowSource.Create(FCatalog);
+  if FFlowBuilder = nil then
+    FFlowBuilder := TFlowBuilder.Create(FFlowSource);
+  if FFlowVM = nil then
+  begin
+    FFlowVM := TFlowViewModel.Create(FFlowBuilder);
+    FFlowControl.Attach(FFlowVM);
+  end;
+  FFlowVM.SetRoot(ASymbolId);
+
+  FInFlow := True;
+  FFlowControl.Visible := True;
+  FFlowControl.BringToFront;
+  FGraph.Visible := False;
+  FFlowBtn.Visible := True;
+  FModeBtn.Visible := True;
+  UpdateModeButton;
+  FStatus.SimpleText := 'Flow: ' + ASymbolId;
+end;
+
+procedure TfrmMain.FlowBtnClick(Sender: TObject);
+begin
+  FInFlow := False;
+  FFlowControl.Visible := False;
+  FGraph.Visible := True;
+  FGraph.BringToFront;
+  FFlowBtn.Visible := False;
+  FModeBtn.Visible := False;
+  FStatus.SimpleText := '';
+end;
+
+procedure TfrmMain.ModeBtnClick(Sender: TObject);
+begin
+  if FFlowVM <> nil then
+  begin
+    FFlowVM.ToggleGlobalMode;
+    UpdateModeButton;
+  end;
+end;
+
+procedure TfrmMain.UpdateModeButton;
+begin
+  if (FFlowVM <> nil) and (FFlowVM.Mode = fmExpanded) then
+    FModeBtn.Caption := 'Expanded'
+  else
+    FModeBtn.Caption := 'Brief';
+end;
+
+procedure TfrmMain.FlowSelected(Sender: TObject; const ASymbolId: string);
+begin
+  SelectTreeNodeById(ASymbolId);
 end;
 
 procedure TfrmMain.GraphViewChanged(Sender: TObject);
