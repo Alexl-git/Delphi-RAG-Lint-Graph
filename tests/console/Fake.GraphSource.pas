@@ -20,6 +20,9 @@ type
     function LocateSymbol(const AQName: string; out AFile: string;
       out ALine: Integer): Boolean;
     function ResolveName(const AName: string; out AQName: string): Boolean;
+    function GetCallees(const AQName: string): TArray<TCallRef>;
+    function GetSymbolMeta(const AQName: string;
+      out ASignature, AModifiers, AKindText: string): Boolean;
   end;
 
   { Loads a caller-supplied topology (built by Test.Graph.Builders) into the
@@ -38,6 +41,9 @@ type
     function LocateSymbol(const AQName: string; out AFile: string;
       out ALine: Integer): Boolean;
     function ResolveName(const AName: string; out AQName: string): Boolean;
+    function GetCallees(const AQName: string): TArray<TCallRef>;
+    function GetSymbolMeta(const AQName: string;
+      out ASignature, AModifiers, AKindText: string): Boolean;
   end;
 
 implementation
@@ -120,6 +126,20 @@ begin
   Result := False;
 end;
 
+function TFakeGraphSource.GetCallees(const AQName: string): TArray<TCallRef>;
+begin
+  Result := nil;
+end;
+
+function TFakeGraphSource.GetSymbolMeta(const AQName: string;
+  out ASignature, AModifiers, AKindText: string): Boolean;
+begin
+  ASignature := '';
+  AModifiers := '';
+  AKindText  := '';
+  Result := False;
+end;
+
 constructor TPreloadedSource.Create(ATemplate: TGraphData);
 begin
   inherited Create;
@@ -181,6 +201,20 @@ function TPreloadedSource.ResolveName(const AName: string;
   out AQName: string): Boolean;
 begin
   AQName := '';
+  Result := False;
+end;
+
+function TPreloadedSource.GetCallees(const AQName: string): TArray<TCallRef>;
+begin
+  Result := nil;
+end;
+
+function TPreloadedSource.GetSymbolMeta(const AQName: string;
+  out ASignature, AModifiers, AKindText: string): Boolean;
+begin
+  ASignature := '';
+  AModifiers := '';
+  AKindText  := '';
   Result := False;
 end;
 

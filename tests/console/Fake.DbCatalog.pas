@@ -25,6 +25,9 @@ type
     function LocateSymbol(const AQName: string; out AFile: string;
       out ALine: Integer): Boolean;
     function ResolveName(const AName: string; out AQName: string): Boolean;
+    function GetCallees(const AQName: string): TArray<TCallRef>;
+    function GetSymbolMeta(const AQName: string;
+      out ASignature, AModifiers, AKindText: string): Boolean;
   end;
 
   TFakeDbCatalog = class(TInterfacedObject, IDbCatalog)
@@ -97,6 +100,20 @@ begin
     AQName := '';
     Result := False;
   end;
+end;
+
+function TStoreSource.GetCallees(const AQName: string): TArray<TCallRef>;
+begin
+  Result := nil;
+end;
+
+function TStoreSource.GetSymbolMeta(const AQName: string;
+  out ASignature, AModifiers, AKindText: string): Boolean;
+begin
+  ASignature := '';
+  AModifiers := '';
+  AKindText  := '';
+  Result := False;
 end;
 
 function TFakeDbCatalog.StoreCount: Integer;

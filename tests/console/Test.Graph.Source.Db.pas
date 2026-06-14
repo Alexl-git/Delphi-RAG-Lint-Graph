@@ -520,6 +520,64 @@ begin
   end;
 end;
 
+{ ---- Task 1 (flow): GetCallees + GetSymbolMeta ---- }
+
+procedure Test_DbSource_GetCallees;
+var
+  DbPath: string;
+  Src:    IGraphSource;
+  Calls:  TArray<TCallRef>;
+begin
+  DbPath := CreateTempV6Db;
+  try
+    Src := TDbGraphSource.Create(DbPath, 0);
+
+    { Bar (lines 10..15) has one 'call' ref at line 12 -> U.TBaz.MB.
+      The line-13 ref is 'type_use', NOT a call, so it must be excluded. }
+    Calls := Src.GetCallees('U.TFoo.Bar');
+    CheckEqualsInt(1, Length(Calls), 'GetCallees(Bar): exactly one call');
+    if Length(Calls) >= 1 then
+    begin
+      CheckEqualsStr('U.TBaz.MB', Calls[0].TargetQName,
+        'GetCallees(Bar)[0].TargetQName = U.TBaz.MB');
+      CheckEqualsInt(12, Calls[0].CallLine,
+        'GetCallees(Bar)[0].CallLine = 12');
+    end;
+
+    { MB makes no calls. }
+    Calls := Src.GetCallees('U.TBaz.MB');
+    CheckEqualsInt(0, Length(Calls), 'GetCallees(MB): no calls');
+
+    Src := nil;
+  finally
+    DeleteTempDb(DbPath);
+  end;
+end;
+
+procedure Test_DbSource_GetSymbolMeta;
+var
+  DbPath: string;
+  Src:    IGraphSource;
+  Sig, Mods, KindText: string;
+begin
+  DbPath := CreateTempV6Db;
+  try
+    Src := TDbGraphSource.Create(DbPath, 0);
+
+    Check(Src.GetSymbolMeta('U.TFoo.Bar', Sig, Mods, KindText),
+      'GetSymbolMeta(Bar) = True');
+    CheckEqualsStr('procedure Bar', Sig, 'GetSymbolMeta(Bar).Signature');
+    CheckEqualsStr('method', KindText, 'GetSymbolMeta(Bar).KindText = method');
+
+    Check(not Src.GetSymbolMeta('No.Such', Sig, Mods, KindText),
+      'GetSymbolMeta(missing) = False');
+
+    Src := nil;
+  finally
+    DeleteTempDb(DbPath);
+  end;
+end;
+
 { ---- Task 5 integration smoke (soft): ORM3 + library catalog ---- }
 
 procedure Test_DbCatalog_LibrarySmoke;
@@ -622,4 +680,6 @@ initialization
   RegisterTest('DbSource_ORM3Smoke',      Test_DbSource_ORM3Smoke);
   RegisterTest('DbCatalog_CrossStoreResolve', Test_DbCatalog_CrossStoreResolve);
   RegisterTest('DbCatalog_LibrarySmoke',  Test_DbCatalog_LibrarySmoke);
+  RegisterTest('DbSource_GetCallees',    Test_DbSource_GetCallees);
+  RegisterTest('DbSource_GetSymbolMeta', Test_DbSource_GetSymbolMeta);
 end.

@@ -71,6 +71,9 @@ type
     { Lightweight: exact qualified_name match, then bare name (kind-priority).
       Returns first hit; does NOT call LoadTopology.  Used by TDbCatalog. }
     function ResolveName(const AName: string; out AQName: string): Boolean;
+    function GetCallees(const AQName: string): TArray<TCallRef>;
+    function GetSymbolMeta(const AQName: string;
+      out ASignature, AModifiers, AKindText: string): Boolean;
   end;
 
   { TDbCatalog: ordered set of DB stores.  SourceForStore lazily creates and
@@ -973,6 +976,84 @@ begin
     if not Q.IsEmpty then
     begin
       AQName := Q.Fields[0].AsString;
+      Result := True;
+    end;
+    Q.Close;
+  finally
+    Q.Free;
+  end;
+end;
+
+{ ---- Task 1 (flow): GetCallees + GetSymbolMeta ---- }
+
+function TDbGraphSource.GetCallees(const AQName: string): TArray<TCallRef>;
+var
+  Q: TFDQuery;
+  List: TList<TCallRef>;
+  R: TCallRef;
+begin
+  List := TList<TCallRef>.Create;
+  try
+    Q := TFDQuery.Create(nil);
+    try
+      Q.Connection := FConn;
+      Q.SQL.Text :=
+        'SELECT r.start_line AS cl, r.name_text AS nm, t.qualified_name AS tq ' +
+        'FROM refs r ' +
+        'JOIN symbols src ON src.qualified_name = :q ' +
+        'JOIN symbols t   ON t.id = r.symbol_id ' +
+        'WHERE r.kind = ''call'' ' +
+        '  AND r.file_id = src.file_id ' +
+        '  AND r.start_line BETWEEN src.start_line AND src.end_line ' +
+        '  AND NOT EXISTS (' +
+        '    SELECT 1 FROM symbols ins ' +
+        '    WHERE ins.file_id = src.file_id ' +
+        '      AND ins.start_line > src.start_line ' +
+        '      AND ins.start_line <= r.start_line ' +
+        '      AND ins.end_line   >= r.start_line) ' +
+        'ORDER BY r.start_line';
+      Q.ParamByName('q').AsString := AQName;
+      Q.Open;
+      while not Q.Eof do
+      begin
+        R.CallLine    := Q.FieldByName('cl').AsInteger;
+        R.RawName     := Q.FieldByName('nm').AsString;
+        R.TargetQName := Q.FieldByName('tq').AsString;
+        List.Add(R);
+        Q.Next;
+      end;
+      Q.Close;
+    finally
+      Q.Free;
+    end;
+    Result := List.ToArray;
+  finally
+    List.Free;
+  end;
+end;
+
+function TDbGraphSource.GetSymbolMeta(const AQName: string;
+  out ASignature, AModifiers, AKindText: string): Boolean;
+var
+  Q: TFDQuery;
+begin
+  ASignature := '';
+  AModifiers := '';
+  AKindText  := '';
+  Result := False;
+  Q := TFDQuery.Create(nil);
+  try
+    Q.Connection := FConn;
+    Q.SQL.Text :=
+      'SELECT signature, modifiers, kind FROM symbols ' +
+      'WHERE qualified_name = :q LIMIT 1';
+    Q.ParamByName('q').AsString := AQName;
+    Q.Open;
+    if not Q.Eof then
+    begin
+      ASignature := Q.FieldByName('signature').AsString;
+      AModifiers := Q.FieldByName('modifiers').AsString;
+      AKindText  := Q.FieldByName('kind').AsString;
       Result := True;
     end;
     Q.Close;
