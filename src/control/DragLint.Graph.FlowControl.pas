@@ -69,6 +69,10 @@ end;
 
 destructor TFlowChartControl.Destroy;
 begin
+  { Detach from the VM so a VM that outlives this control never calls back
+    into a freed instance (the VM may be owned elsewhere). }
+  if FVM <> nil then
+    FVM.OnChanged := nil;
   FToggleRects.Free;
   FBoxRects.Free;
   inherited;
@@ -76,6 +80,9 @@ end;
 
 procedure TFlowChartControl.Attach(AVM: TFlowViewModel);
 begin
+  { Drop our handler from any previously-attached VM before switching. }
+  if FVM <> nil then
+    FVM.OnChanged := nil;
   FVM := AVM;
   if FVM <> nil then
     FVM.OnChanged := VMChanged;
@@ -153,7 +160,7 @@ end;
 
 procedure TFlowChartControl.Relayout;
 var
-  I, Y, H, X: Integer;
+  I, Y, H, X, MaxRight: Integer;
   Lines: TArray<string>;
   R, TR: TRect;
 begin
@@ -163,10 +170,13 @@ begin
   if (FVM = nil) or (not FVM.HasTree) then
   begin
     FContentH := Y;
-    FPaint.SetBounds(0, 0, BOX_W + 4 * INDENT + 2 * LEFT_MARGIN, FContentH);
+    FPaint.SetBounds(0, 0, BOX_W + 2 * LEFT_MARGIN, FContentH);
     Exit;
   end;
 
+  { Track the widest box right-edge so deep (indented) boxes are not clipped
+    by a hard-coded width -- the depth cap can reach 6 levels. }
+  MaxRight := BOX_W + 2 * LEFT_MARGIN;
   for I := 0 to High(FVM.Tree.Steps) do
   begin
     Lines := BoxLines(I);
@@ -174,13 +184,15 @@ begin
     X := LEFT_MARGIN + FVM.Tree.Steps[I].Depth * INDENT;
     R := Rect(X, Y, X + BOX_W, Y + H);
     FBoxRects.Add(R);
+    if R.Right + LEFT_MARGIN > MaxRight then
+      MaxRight := R.Right + LEFT_MARGIN;
     TR := Rect(R.Right - TOGGLE_SZ - 4, R.Top + 4,
                R.Right - 4, R.Top + 4 + TOGGLE_SZ);
     FToggleRects.Add(TR);
     Y := Y + H + V_GAP;
   end;
   FContentH := Y;
-  FPaint.SetBounds(0, 0, BOX_W + 5 * INDENT + 2 * LEFT_MARGIN, FContentH);
+  FPaint.SetBounds(0, 0, MaxRight, FContentH);
 end;
 
 procedure TFlowChartControl.PaintBoxPaint(Sender: TObject);
