@@ -28,6 +28,7 @@ type
     FVM:      TFlowViewModel;
     FBoxRects:    TList<TRect>;     { index-aligned with VM.Tree.Steps }
     FToggleRects: TList<TRect>;     { per-step +/- hit rect }
+    FMoreRects:   TList<TRect>;     { per-step "... N more" hit rect }
     FContentH: Integer;
     FOnSelect: TFlowSymbolEvent;
     procedure PaintBoxPaint(Sender: TObject);
@@ -64,6 +65,7 @@ begin
   inherited Create(AOwner);
   FBoxRects    := TList<TRect>.Create;
   FToggleRects := TList<TRect>.Create;
+  FMoreRects   := TList<TRect>.Create;
   BorderStyle := bsNone;
   Color := clWindow;
   FPaint := TPaintBox.Create(Self);
@@ -78,6 +80,7 @@ begin
     into a freed instance (the VM may be owned elsewhere). }
   if FVM <> nil then
     FVM.OnChanged := nil;
+  FMoreRects.Free;
   FToggleRects.Free;
   FBoxRects.Free;
   inherited;
@@ -154,6 +157,10 @@ begin
       end;
     end;
 
+    if (S.Depth = 0) and (Length(S.ChildIndices) = 0) and
+       (S.TruncatedChildren = 0) and (not S.IsExternal) then
+      L.Add('(no outgoing calls)');
+
     if S.TruncatedChildren > 0 then
       L.Add('  ... ' + IntToStr(S.TruncatedChildren) + ' more');
 
@@ -171,6 +178,7 @@ var
 begin
   FBoxRects.Clear;
   FToggleRects.Clear;
+  FMoreRects.Clear;
   Y := TOP_MARGIN;
   if (FVM = nil) or (not FVM.HasTree) then
   begin
@@ -194,6 +202,12 @@ begin
     TR := Rect(R.Right - TOGGLE_SZ - 4, R.Top + 4,
                R.Right - 4, R.Top + 4 + TOGGLE_SZ);
     FToggleRects.Add(TR);
+    if FVM.Tree.Steps[I].TruncatedChildren > 0 then
+      FMoreRects.Add(Rect(R.Left + BOX_PAD,
+        R.Top + BOX_PAD + (Length(Lines) - 1) * LINE_H,
+        R.Right, R.Top + BOX_PAD + Length(Lines) * LINE_H))
+    else
+      FMoreRects.Add(Rect(0, 0, 0, 0));
     Y := Y + H + V_GAP;
   end;
   FContentH := Y;
@@ -284,6 +298,12 @@ begin
     if (not FVM.Tree.Steps[I].IsExternal) and FToggleRects[I].Contains(P) then
     begin
       FVM.ToggleBox(I);
+      Exit;
+    end;
+  for I := 0 to FMoreRects.Count - 1 do
+    if (FVM.Tree.Steps[I].TruncatedChildren > 0) and FMoreRects[I].Contains(P) then
+    begin
+      FVM.ExpandTruncation(I);
       Exit;
     end;
   for I := 0 to FBoxRects.Count - 1 do

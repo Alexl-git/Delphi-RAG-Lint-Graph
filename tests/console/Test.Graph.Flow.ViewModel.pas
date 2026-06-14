@@ -61,6 +61,37 @@ begin
   end;
 end;
 
+procedure Test_FlowVM_ExpandTruncation;
+var
+  Fake: TFakeFlowSource;
+  Bld:  TFlowBuilder;
+  VM:   TFlowViewModel;
+begin
+  Fake := TFakeFlowSource.Create;
+  Fake.AddInfo('A', 'a', True, 'a');
+  Fake.AddInfo('B', 'b', True, ''); Fake.AddInfo('C', 'c', True, '');
+  Fake.AddInfo('D', 'd', True, ''); Fake.AddInfo('E', 'e', True, '');
+  Fake.AddCall('A', 'B', 1); Fake.AddCall('A', 'C', 2);
+  Fake.AddCall('A', 'D', 3); Fake.AddCall('A', 'E', 4);
+  Bld := TFlowBuilder.Create(Fake as IFlowSource, 6, 2);  { MaxBreadth=2 }
+  VM  := TFlowViewModel.Create(Bld);
+  try
+    VM.SetRoot('A');
+    CheckEqualsInt(2, Length(VM.Tree.Steps[0].ChildIndices),
+      'root capped to 2 before expand');
+    Check(VM.Tree.Steps[0].TruncatedChildren > 0, 'root truncated before expand');
+    VM.ExpandTruncation(0);
+    CheckEqualsInt(4, Length(VM.Tree.Steps[0].ChildIndices),
+      'root shows all 4 after ExpandTruncation');
+    CheckEqualsInt(0, VM.Tree.Steps[0].TruncatedChildren,
+      'no truncation after expand');
+  finally
+    VM.Free;
+    Bld.Free;
+  end;
+end;
+
 initialization
   RegisterTest('FlowVM_SetRootAndModes', Test_FlowVM_SetRootAndModes);
+  RegisterTest('FlowVM_ExpandTruncation', Test_FlowVM_ExpandTruncation);
 end.

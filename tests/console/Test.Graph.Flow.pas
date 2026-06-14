@@ -215,6 +215,66 @@ begin
   end;
 end;
 
+procedure Test_Flow_ExpandedLiftsCap;
+var
+  Fake: TFakeFlowSource;
+  B: TFlowBuilder;
+  T: TFlowTree;
+  Root: Integer;
+begin
+  Fake := TFakeFlowSource.Create;
+  Fake.AddInfo('A', 'a', True, 'a');
+  Fake.AddInfo('B', 'b', True, ''); Fake.AddInfo('C', 'c', True, '');
+  Fake.AddInfo('D', 'd', True, ''); Fake.AddInfo('E', 'e', True, '');
+  Fake.AddCall('A', 'B', 1); Fake.AddCall('A', 'C', 2);
+  Fake.AddCall('A', 'D', 3); Fake.AddCall('A', 'E', 4);
+  B := TFlowBuilder.Create(Fake as IFlowSource, 6, 2);  { MaxBreadth=2 }
+  try
+    { without expansion: capped at 2, 2 truncated }
+    T := B.Build('A');
+    Root := StepById(T, 'A');
+    CheckEqualsInt(2, Length(T.Steps[Root].ChildIndices),
+      'unexpanded: 2 children');
+    CheckEqualsInt(2, T.Steps[Root].TruncatedChildren,
+      'unexpanded: 2 truncated');
+    { with A expanded: all 4, no truncation }
+    T := B.Build('A', TArray<string>.Create('A'));
+    Root := StepById(T, 'A');
+    CheckEqualsInt(4, Length(T.Steps[Root].ChildIndices),
+      'expanded: all 4 children');
+    CheckEqualsInt(0, T.Steps[Root].TruncatedChildren,
+      'expanded: no truncation');
+  finally
+    B.Free;
+  end;
+end;
+
+procedure Test_Flow_DbSource_MultiStore;
+var
+  PathA, PathB: string;
+  Cat: IDbCatalog;
+  FlowSrc: IFlowSource;
+  InfoA, InfoB, InfoZ: TFlowInfo;
+begin
+  PathA := CreateTempV6DbNamed('A');
+  PathB := CreateTempV6DbNamed('B');
+  try
+    Cat := TDbCatalog.Create([PathA, PathB]);
+    FlowSrc := TDbFlowSource.Create(Cat);
+    InfoA := FlowSrc.GetInfo('A');
+    Check(InfoA.Found, 'A resolved from store 0');
+    InfoB := FlowSrc.GetInfo('B');
+    Check(InfoB.Found, 'B resolved from store 1 (first-hit across stores)');
+    InfoZ := FlowSrc.GetInfo('Zed');
+    Check(not InfoZ.Found, 'Zed not found in either store');
+    Cat := nil;
+    FlowSrc := nil;
+  finally
+    DeleteTempDb(PathA);
+    DeleteTempDb(PathB);
+  end;
+end;
+
 initialization
   RegisterTest('Flow_OrderAndDedup',      Test_Flow_OrderAndDedup);
   RegisterTest('Flow_Recursion',          Test_Flow_Recursion);
@@ -222,4 +282,6 @@ initialization
   RegisterTest('Flow_BreadthCap',         Test_Flow_BreadthCap);
   RegisterTest('Flow_DegradeAndExternal', Test_Flow_DegradeAndExternal);
   RegisterTest('Flow_DbSource_RealFixture', Test_Flow_DbSource_RealFixture);
+  RegisterTest('Flow_ExpandedLiftsCap',   Test_Flow_ExpandedLiftsCap);
+  RegisterTest('Flow_DbSource_MultiStore', Test_Flow_DbSource_MultiStore);
 end.

@@ -67,16 +67,20 @@ type
     FMaxDepth:   Integer;
     FMaxBreadth: Integer;
     FSteps:      TList<TFlowStep>;
+    FExpanded:   TDictionary<string, Boolean>;
     function DedupOrder(const ACallees: TArray<TFlowCallee>): TArray<TFlowCallee>;
     function AddExternal(const ACallee: TFlowCallee; ADepth: Integer): Integer;
     function AddStep(const AId: string; ADepth, ACallLine: Integer;
       const AAncestors: TArray<string>): Integer;
+    function IsExpanded(const AId: string): Boolean;
   public
     /// <summary>Creates a builder using ASource; defaults: max depth 6, max breadth 12.</summary>
     constructor Create(const ASource: IFlowSource;
       AMaxDepth: Integer = 6; AMaxBreadth: Integer = 12);
-    /// <summary>Builds and returns the flow tree rooted at ARootId.</summary>
-    function Build(const ARootId: string): TFlowTree;
+    /// <summary>Builds and returns the flow tree rooted at ARootId.
+    ///  AExpanded lists SymbolIds whose depth/breadth caps are lifted.</summary>
+    function Build(const ARootId: string;
+      const AExpanded: TArray<string> = nil): TFlowTree;
   end;
 
 implementation
@@ -134,6 +138,11 @@ begin
   Result := FSteps.Add(X);
 end;
 
+function TFlowBuilder.IsExpanded(const AId: string): Boolean;
+begin
+  Result := (FExpanded <> nil) and FExpanded.ContainsKey(AId);
+end;
+
 function TFlowBuilder.AddStep(const AId: string; ADepth, ACallLine: Integer;
   const AAncestors: TArray<string>): Integer;
 var
@@ -173,7 +182,7 @@ begin
   Callees := DedupOrder(FSource.GetCallees(AId));
 
   { Depth cap: at the deepest allowed level, do not expand; record the count. }
-  if ADepth >= FMaxDepth then
+  if (ADepth >= FMaxDepth) and not IsExpanded(AId) then
   begin
     Step.TruncatedChildren := Length(Callees);
     FSteps[Result] := Step;     { write back scalar change }
@@ -182,7 +191,7 @@ begin
 
   { Breadth cap. }
   Take := Length(Callees);
-  if Take > FMaxBreadth then Take := FMaxBreadth;
+  if (Take > FMaxBreadth) and not IsExpanded(AId) then Take := FMaxBreadth;
 
   SetLength(Anc, Length(AAncestors) + 1);
   for I := 0 to High(AAncestors) do Anc[I] := AAncestors[I];
@@ -209,15 +218,22 @@ begin
   FSteps[Result] := Step;       { write back children + truncation }
 end;
 
-function TFlowBuilder.Build(const ARootId: string): TFlowTree;
+function TFlowBuilder.Build(const ARootId: string;
+  const AExpanded: TArray<string>): TFlowTree;
+var
+  S: string;
 begin
-  FSteps := TList<TFlowStep>.Create;
+  FExpanded := TDictionary<string, Boolean>.Create;
+  FSteps    := TList<TFlowStep>.Create;
   try
-    AddStep(ARootId, 0, -1, nil);   { nil = empty ancestor path }
+    for S in AExpanded do
+      FExpanded.AddOrSetValue(S, True);
+    AddStep(ARootId, 0, -1, nil);
     Result.RootId := ARootId;
     Result.Steps  := FSteps.ToArray;
   finally
     FreeAndNil(FSteps);
+    FreeAndNil(FExpanded);
   end;
 end;
 

@@ -25,9 +25,12 @@ type
     FTree:      TFlowTree;
     FHasTree:   Boolean;
     FMode:      TFlowMode;
+    FRootId:    string;
     FOverrides: TDictionary<Integer, Boolean>;  { step idx -> expanded? }
+    FExpanded:  TDictionary<string, Boolean>;   { symbol ids with cap lifted }
     FOnChanged: TNotifyEvent;
     procedure Changed;
+    procedure Rebuild;
   public
     constructor Create(ABuilder: TFlowBuilder);
     destructor Destroy; override;
@@ -39,6 +42,8 @@ type
     procedure ToggleBox(AStepIndex: Integer);
     /// <summary>Returns True if AStepIndex should be rendered expanded (mode + override).</summary>
     function  EffectiveExpanded(AStepIndex: Integer): Boolean;
+    /// <summary>Lifts the depth/breadth cap for the node at AStepIndex and rebuilds.</summary>
+    procedure ExpandTruncation(AStepIndex: Integer);
     property  Tree: TFlowTree read FTree;
     property  HasTree: Boolean read FHasTree;
     property  Mode: TFlowMode read FMode;
@@ -53,10 +58,12 @@ begin
   FBuilder   := ABuilder;
   FMode      := fmBrief;
   FOverrides := TDictionary<Integer, Boolean>.Create;
+  FExpanded  := TDictionary<string, Boolean>.Create;
 end;
 
 destructor TFlowViewModel.Destroy;
 begin
+  FExpanded.Free;
   FOverrides.Free;
   inherited;
 end;
@@ -66,12 +73,19 @@ begin
   if Assigned(FOnChanged) then FOnChanged(Self);
 end;
 
-procedure TFlowViewModel.SetRoot(const ARootId: string);
+procedure TFlowViewModel.Rebuild;
 begin
-  FOverrides.Clear;
-  FTree := FBuilder.Build(ARootId);
+  FTree := FBuilder.Build(FRootId, FExpanded.Keys.ToArray);
   FHasTree := Length(FTree.Steps) > 0;
   Changed;
+end;
+
+procedure TFlowViewModel.SetRoot(const ARootId: string);
+begin
+  FRootId := ARootId;
+  FOverrides.Clear;
+  FExpanded.Clear;
+  Rebuild;
 end;
 
 procedure TFlowViewModel.ToggleGlobalMode;
@@ -91,6 +105,16 @@ function TFlowViewModel.EffectiveExpanded(AStepIndex: Integer): Boolean;
 begin
   if not FOverrides.TryGetValue(AStepIndex, Result) then
     Result := (FMode = fmExpanded);
+end;
+
+procedure TFlowViewModel.ExpandTruncation(AStepIndex: Integer);
+begin
+  if (AStepIndex >= 0) and (AStepIndex <= High(FTree.Steps)) and
+     (FTree.Steps[AStepIndex].TruncatedChildren > 0) then
+  begin
+    FExpanded.AddOrSetValue(FTree.Steps[AStepIndex].SymbolId, True);
+    Rebuild;
+  end;
 end;
 
 end.
