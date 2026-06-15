@@ -8,7 +8,8 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Math, System.UITypes, System.StrUtils,
-  System.Generics.Collections, System.Generics.Defaults,
+  System.Generics.Collections, System.Generics.Defaults, System.IOUtils,
+  System.JSON,
   Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls,
   Vcl.Graphics, Vcl.Menus,
   Winapi.Windows, Winapi.Messages, Winapi.ShellAPI,
@@ -54,6 +55,7 @@ type
     FVM:         IGraphViewModel;
     FCatalog:    IDbCatalog;
     FDbPaths:    TArray<string>;
+    FPlatform:   string;   { --platform win32|win64; forwarded to resolve-dbs }
     FLoaded:     Boolean;
     FParentHwnd: HWND;     { v0.43: when nonzero, embed as a WS_CHILD of this }
     { Structure panel (left dock) }
@@ -111,6 +113,9 @@ type
     procedure TreeCtxWhereUsed(Sender: TObject);
     procedure TreeCtxCenter(Sender: TObject);
     procedure ParseDbArgs;
+    function  ResolveEngineExe: string;
+    function  SpawnCaptureStdout(const AExe, AArgs: string): string;
+    procedure ResolveDbsFromEngine;
     procedure RunLoad;
     procedure FormShow(Sender: TObject);
     procedure WMLoadGraph(var Msg: TMessage); message WM_LOADGRAPH;
@@ -434,6 +439,174 @@ begin
   FEnterFlowBtn.OnClick := EnterFlowBtnClick;
 end;
 
+{ ---------------------------------------------------------------------------- }
+{ resolve-dbs shell-out (manifest-driven DB selection when no --db given)     }
+{ ---------------------------------------------------------------------------- }
+
+// v0.45 Task 10: locate the drag-lint engine executable.
+// Lookup order:
+//   1. drag-lint.exe beside THIS executable (preferred for installed setups).
+//   2. Fallback: <ExeDir>\..\..\..\Delphi-RAG-lint\third_party\dll-win64\drag-lint.exe
+//      (development layout: Delphi-RAG-Lint-Graph lives next to Delphi-RAG-lint).
+// Returns '' when no candidate is found on disk.
+/// <summary>Finds the drag-lint.exe engine used to run the resolve-dbs command.
+/// Returns an empty string when no candidate exists on disk.</summary>
+/// <remarks>Not thread-safe; call from the owning (main) thread only.</remarks>
+function TfrmMain.ResolveEngineExe: string;
+var
+  ExeDir, Candidate: string;
+begin
+  ExeDir := ExtractFilePath(ParamStr(0));
+
+  // 1. Beside the graph viewer executable.
+  Candidate := TPath.Combine(ExeDir, 'drag-lint.exe');
+  if TFile.Exists(Candidate) then
+    Exit(Candidate);
+
+  // 2. Development layout: ../../../Delphi-RAG-lint/third_party/dll-win64/
+  Candidate := TPath.GetFullPath(
+    TPath.Combine(ExeDir,
+      '..\..\..\Delphi-RAG-lint\third_party\dll-win64\drag-lint.exe'));
+  if TFile.Exists(Candidate) then
+    Exit(Candidate);
+
+  Result := '';
+end;
+
+// v0.45 Task 10: spawn AExe with AArgs (a single command-line string, already
+// quoted), capture stdout, and return it as a string.  Returns '' on any error.
+// CloseHandle is called for all kernel objects regardless of outcome.
+/// <summary>Spawns AExe with the given argument string and returns the captured
+/// stdout.  Returns an empty string on spawn failure or empty output.</summary>
+/// <param name="AExe">Full path to the executable; must be quoted if it
+///   contains spaces.</param>
+/// <param name="AArgs">Full argument string to append after AExe.</param>
+/// <returns>Captured stdout text, or '' on error.</returns>
+/// <remarks>Not thread-safe; call from the owning (main) thread only.</remarks>
+function TfrmMain.SpawnCaptureStdout(const AExe, AArgs: string): string;
+const
+  PIPE_BUF = 4096;
+var
+  SA:        TSecurityAttributes;
+  hReadPipe, hWritePipe: THandle;
+  SI:        TStartupInfo;
+  PI:        TProcessInformation;
+  CmdLine:   string;
+  Buf:       array[0..PIPE_BUF - 1] of AnsiChar;
+  BytesRead: DWORD;
+begin
+  Result := '';
+  hReadPipe  := 0;
+  hWritePipe := 0;
+  PI.hProcess := 0;
+  PI.hThread  := 0;
+
+  // Create anonymous pipe for stdout capture.
+  FillChar(SA, SizeOf(SA), 0);
+  SA.nLength        := SizeOf(SA);
+  SA.bInheritHandle := True;
+  if not CreatePipe(hReadPipe, hWritePipe, @SA, 0) then
+    Exit;
+
+  try
+    // Make the read end non-inheritable so the child doesn't hold it open.
+    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+    FillChar(SI, SizeOf(SI), 0);
+    SI.cb          := SizeOf(SI);
+    SI.dwFlags     := STARTF_USESTDHANDLES or STARTF_USESHOWWINDOW;
+    SI.wShowWindow := SW_HIDE;
+    SI.hStdOutput  := hWritePipe;
+    SI.hStdError   := GetStdHandle(STD_ERROR_HANDLE);
+    SI.hStdInput   := GetStdHandle(STD_INPUT_HANDLE);
+
+    CmdLine := '"' + AExe + '" ' + AArgs;
+    // CreateProcess needs a mutable buffer.
+    var MutableCmd := CmdLine;
+    UniqueString(MutableCmd);
+
+    if not CreateProcess(nil, PChar(MutableCmd), nil, nil, True,
+        CREATE_NO_WINDOW, nil, nil, SI, PI) then
+      Exit;
+
+    // Close the write end in the parent: once the child closes its handle the
+    // read end will signal EOF.
+    CloseHandle(hWritePipe);
+    hWritePipe := 0;
+
+    // Read all stdout. Each ReadFile call may return a partial buffer;
+    // accumulate via RawByteString to handle the exact byte count.
+    var Raw: RawByteString;
+    Raw := '';
+    while ReadFile(hReadPipe, Buf[0], PIPE_BUF, BytesRead, nil) and
+          (BytesRead > 0) do
+    begin
+      SetLength(Raw, Length(Raw) + Integer(BytesRead));
+      Move(Buf[0], Raw[Length(Raw) - Integer(BytesRead) + 1], BytesRead);
+    end;
+    Result := string(Raw);
+
+    WaitForSingleObject(PI.hProcess, INFINITE);
+  finally
+    if hWritePipe <> 0 then CloseHandle(hWritePipe);
+    CloseHandle(hReadPipe);
+    if PI.hProcess <> 0 then CloseHandle(PI.hProcess);
+    if PI.hThread  <> 0 then CloseHandle(PI.hThread);
+  end;
+end;
+
+// v0.45 Task 10: when the viewer was launched with no --db flags, shell out to
+// drag-lint.exe resolve-dbs --json [--platform <p>] to obtain the manifest-driven
+// DB list.  Parses the JSON array and populates FDbPaths.
+// On any error (engine not found, spawn failure, empty/invalid JSON) the method
+// returns without modifying FDbPaths; RunLoad's existing "no DB" fallback then
+// shows the prompt message -- no crash.
+/// <summary>Populates FDbPaths by spawning drag-lint resolve-dbs when no
+/// explicit --db flags were given.  Does nothing on error; RunLoad's fallback
+/// message is shown instead.</summary>
+/// <remarks>Not thread-safe; call from the owning (main) thread only.</remarks>
+procedure TfrmMain.ResolveDbsFromEngine;
+var
+  EngineExe, PlatArg, RawOutput: string;
+  J:    TJSONValue;
+  JArr: TJSONArray;
+  K, Count: Integer;
+  Path: string;
+begin
+  EngineExe := ResolveEngineExe;
+  if EngineExe = '' then
+    Exit;  // No engine found; fall through to RunLoad's prompt.
+
+  // Build argument string: resolve-dbs --json [--platform <p>]
+  PlatArg := '';
+  if FPlatform <> '' then
+    PlatArg := ' --platform ' + FPlatform;
+  RawOutput := SpawnCaptureStdout(EngineExe, 'resolve-dbs --json' + PlatArg);
+  if RawOutput = '' then
+    Exit;
+
+  // Parse JSON array: ["path1","path2",...]
+  J := TJSONObject.ParseJSONValue(RawOutput.Trim);
+  if J = nil then
+    Exit;
+  try
+    if not (J is TJSONArray) then
+      Exit;
+    JArr  := TJSONArray(J);
+    Count := JArr.Count;
+    if Count = 0 then
+      Exit;
+    SetLength(FDbPaths, Count);
+    for K := 0 to Count - 1 do
+    begin
+      Path := JArr.Items[K].Value;
+      FDbPaths[K] := Path;
+    end;
+  finally
+    J.Free;
+  end;
+end;
+
 procedure TfrmMain.ParseDbArgs;
 var
   I:     Integer;
@@ -442,6 +615,7 @@ var
 begin
   Count := 0;
   SetLength(FDbPaths, 0);
+  FPlatform := '';
   I := 1;
   while I <= ParamCount do
   begin
@@ -453,9 +627,18 @@ begin
       Inc(Count);
       Inc(I, 2);
     end
+    else if (LowerCase(S) = '--platform') and (I < ParamCount) then
+    begin
+      FPlatform := ParamStr(I + 1);
+      Inc(I, 2);
+    end
     else
       Inc(I);
   end;
+
+  // When no explicit --db flags: try manifest-driven DB selection via the engine.
+  if Length(FDbPaths) = 0 then
+    ResolveDbsFromEngine;
 end;
 
 procedure TfrmMain.FormShow(Sender: TObject);
