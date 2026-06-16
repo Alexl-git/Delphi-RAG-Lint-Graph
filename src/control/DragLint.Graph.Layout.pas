@@ -105,7 +105,7 @@ var
   Iter, I, J, SrcIdx, DstIdx: Integer;
   A, B: PGraphNode;
   E: TGraphEdge;
-  DX, DY, Dist, Force: Double;
+  DX, DY, Dist, Force, Gap: Double;
   VLen: Double;
 begin
   Result := False;
@@ -133,7 +133,13 @@ begin
         DY := A.Y - B.Y;
         Dist := Sqrt(DX * DX + DY * DY);
         if Dist < 0.01 then Dist := 0.01;
-        Force := (FK * FK) / Dist;
+        { v0.46: SIZE-AWARE repulsion. Use the gap between node BOUNDARIES, not
+          centre distance, so a large node (an expanded UML class-box with a big
+          Radius) pushes smaller nodes (dots) clear of its footprint instead of
+          letting them overlap it. As Gap -> 0 the force grows sharply. }
+        Gap := Dist - A.Radius - B.Radius;
+        if Gap < 1.0 then Gap := 1.0;
+        Force := (FK * FK) / Gap;
         A.VX := A.VX + (DX / Dist) * Force;
         A.VY := A.VY + (DY / Dist) * Force;
       end;
@@ -207,7 +213,7 @@ function TGraphLayout.StepVisible(AData: TGraphData;
 var
   Iter, I, J: Integer;
   A, B: PGraphNode;
-  DX, DY, Dist, Force, VLen: Double;
+  DX, DY, Dist, Force, VLen, Gap: Double;
   VN, EN: Integer;
 begin
   Result := False;
@@ -237,7 +243,11 @@ begin
         DY := A.Y - B.Y;
         Dist := Sqrt(DX * DX + DY * DY);
         if Dist < 0.01 then Dist := 0.01;
-        Force := (FK * FK) / Dist;
+        { v0.46: size-aware repulsion (see Step) -- gap between boundaries so an
+          expanded class-box clears the dots around it. }
+        Gap := Dist - A.Radius - B.Radius;
+        if Gap < 1.0 then Gap := 1.0;
+        Force := (FK * FK) / Gap;
         A.VX := A.VX + (DX / Dist) * Force;
         A.VY := A.VY + (DY / Dist) * Force;
       end;

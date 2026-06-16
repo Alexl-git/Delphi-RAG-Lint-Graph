@@ -573,6 +573,26 @@ begin
     VisIdx[I] := NIdx;
     N := FVM.Data.NodeAt(NIdx);
     if N.Radius < 1 then N.Radius := 12;
+    { v0.46: pre-size a node that will render as an expanded UML class-box, so
+      the size-aware force layout reserves space for the box BEFORE this
+      synchronous settle (paint refines the exact radius). Non-box nodes are
+      reset to the small dot radius. Mirrors the box condition in DrawNodes. }
+    var Kids: Integer := 0;
+    if N.Kind in [nkClass, nkInterface, nkRecord, nkType] then
+      Kids := Length(FVM.Data.ChildrenOf(NIdx));
+    if (((N.Kind in [nkClass, nkInterface, nkRecord]) or
+         ((N.Kind = nkType) and (Kids > 0)))) and
+       ((FZoom >= 0.4) or (N.Id = FVM.SelectedId)) then
+    begin
+      var Shown: Integer := Kids;
+      if Shown > 14 then Shown := 14;
+      var Hpx: Double := (Shown + 3) * 16.0;   { rows + title + pad, ~16px/row }
+      N.Radius := 0.5 * Sqrt(190.0 * 190.0 + Hpx * Hpx) /
+        (if FZoom < 0.05 then 0.05 else FZoom);
+      if N.Radius < 12.0 then N.Radius := 12.0;
+    end
+    else
+      N.Radius := 12.0;
     if not FPlaced.ContainsKey(NIdx) then
     begin
       PIdx := FVM.Data.ParentIndexOf(NIdx);
@@ -1445,6 +1465,13 @@ begin
   if HasAbove then Inc(H, RowH);
   if HasBelow then Inc(H, RowH);
 
+  { v0.46: publish this box's WORLD bounding radius back to the node so the
+    size-aware force layout pushes other nodes (dots) clear of the box instead
+    of drawing them under it. W,H are pixels; divide by zoom for world units. }
+  ANode.Radius := 0.5 * Sqrt(Double(W) * W + Double(H) * H) /
+    (if FZoom < 0.05 then 0.05 else FZoom);
+  if ANode.Radius < 12.0 then ANode.Radius := 12.0;
+
   BoxL := ACenter.X - W div 2;
   BoxT := ACenter.Y - H div 2;
 
@@ -1615,6 +1642,10 @@ begin
       DrawUmlTypeBox(N, PN.NodeIdx, P, N.Id = SelId);
       Continue;
     end;
+
+    { v0.46: this node is drawn as a small dot/compact shape (not an expanded
+      box) -> keep its layout radius small so it doesn't over-repel. }
+    if N.Radius > 16 then N.Radius := 12;
 
     { Dimmed: blend fill toward background }
     if PN.Dimmed then
