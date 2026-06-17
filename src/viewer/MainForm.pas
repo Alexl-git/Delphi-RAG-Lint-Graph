@@ -163,6 +163,38 @@ begin
       Exit(ParamStr(I + 1));
 end;
 
+{ v0.47: parent-process exit watcher. When the IDE plugin launches us with
+  --parent-pid <IDE pid>, a thread blocks on the IDE process handle and
+  force-exits THIS viewer when the IDE dies -- so a crashed or killed IDE never
+  leaves an orphaned drag_lint_graph.exe holding the project index DB open
+  (which would break a later reindex). Belt-and-suspenders to the plugin's
+  kill-on-close job object. Raw CreateThread keeps it immune to a hung VCL loop;
+  TerminateProcess(self) guarantees teardown. }
+function ParentWatchProc(P: Pointer): DWORD; stdcall;
+var
+  H: THandle;
+begin
+  Result := 0;
+  H := OpenProcess(SYNCHRONIZE, False, DWORD(NativeUInt(P)));
+  if H = 0 then Exit;
+  try
+    if WaitForSingleObject(H, INFINITE) = WAIT_OBJECT_0 then
+      TerminateProcess(GetCurrentProcess, 0);
+  finally
+    CloseHandle(H);
+  end;
+end;
+
+procedure StartParentExitWatch(APid: Cardinal);
+var
+  Tid: DWORD;
+  H: THandle;
+begin
+  if APid = 0 then Exit;
+  H := CreateThread(nil, 0, @ParentWatchProc, Pointer(NativeUInt(APid)), 0, Tid);
+  if H <> 0 then CloseHandle(H);
+end;
+
 procedure TfrmMain.CreateParams(var Params: TCreateParams);
 begin
   inherited CreateParams(Params);
@@ -205,6 +237,9 @@ begin
       Top  := 0;
     end;
   end;
+
+  { v0.47: self-exit if the spawning IDE dies (no-op when --parent-pid absent). }
+  StartParentExitWatch(Cardinal(StrToInt64Def(GetParamValue('--parent-pid'), 0)));
 
   FStructTags := TObjectList<TStructTag>.Create(True);
   CreateControls;
