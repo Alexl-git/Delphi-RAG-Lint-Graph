@@ -39,10 +39,11 @@ if errorlevel 1 ( echo ERROR: DragLintGraphDcl.bpl build FAILED & exit /b 1 )
 echo OK: DragLintGraphDcl.bpl
 
 REM --------------------------------------------------------------------------
-REM 4. Viewer EXE (links units directly, demo host)
+REM 4. Viewer EXE (links units directly, demo host). Win64: separate process,
+REM    not bound to the 32-bit IDE -> memory headroom for large indexes.
 echo.
-echo === Building drag_lint_graph.exe ===
-msbuild /t:Build /p:Config=Debug /p:Platform=Win32 /v:minimal "%ROOT%\src\viewer\drag_lint_graph.dproj"
+echo === Building drag_lint_graph.exe (Win64) ===
+msbuild /t:Build /p:Config=Debug /p:Platform=Win64 /v:minimal "%ROOT%\src\viewer\drag_lint_graph.dproj"
 if errorlevel 1 ( echo ERROR: drag_lint_graph.exe build FAILED & exit /b 1 )
 echo OK: drag_lint_graph.exe
 

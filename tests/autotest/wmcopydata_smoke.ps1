@@ -5,7 +5,7 @@
 # the editor-sync wiring in isolation -- the plugin is the real sender.
 $ErrorActionPreference = 'Stop'
 
-$exe = 'C:\Projects\Delphi-RAG-Lint-Graph\bin\Win32\drag_lint_graph.exe'
+$exe = 'C:\Projects\Delphi-RAG-Lint-Graph\bin\Win64\drag_lint_graph.exe'
 $db  = 'C:\Projects\DB\ORM3\drag-lint.sqlite'
 $realSym = 'uPLANLIST'          # a unit known to exist in the ORM3 index
 $bogusSym = 'ZZ_NoSuchSymbol_QQ'

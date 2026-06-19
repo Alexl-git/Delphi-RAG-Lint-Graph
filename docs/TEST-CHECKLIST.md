@@ -7,7 +7,7 @@ Three groups. **A and B are standalone and ready NOW (no IDE).**
 ## A. GRAPH VIEWER  -  standalone, ready now
 Start it (no IDE):
 
-    C:\Projects\Delphi-RAG-Lint-Graph\bin\Win32\drag_lint_graph.exe --db C:\Projects\DB\ORM3\drag-lint.sqlite
+    C:\Projects\Delphi-RAG-Lint-Graph\bin\Win64\drag_lint_graph.exe --db C:\Projects\DB\ORM3\drag-lint.sqlite
 
 (To also see library types, add a second db:
   ... --db C:\Projects\Delphi-RAG-lint\third_party\dll-win32\drag-lint-library.sqlite )
