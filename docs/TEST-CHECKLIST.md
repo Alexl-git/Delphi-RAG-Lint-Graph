@@ -48,6 +48,17 @@ Start it (no IDE):
          e.g. "Method: uPLANLIST.TmcPLANLIST.Create  (uPLANLIST.pas:88)".
 [ ] A19. ZOOM: the slider + "Fit" button (top-right) zoom / reset the view.
 [ ] A20. Double-click a node -> drills in (navigate into it).
+[ ] A21. NAV HISTORY: top-right has "<" (Back) and ">" (Forward) buttons left of
+         "Fit". Both start DISABLED (greyed). Hover shows "Back -- previous graph
+         view" / "Forward -- next graph view".
+[ ] A22. Search/select several different symbols in turn (left panel tree, or the
+         search box) -> "<" Back becomes enabled after the 2nd. Click "<" -> the
+         graph re-centers on the PREVIOUS view; ">" Forward becomes enabled.
+[ ] A23. Click ">" Forward -> returns to the later view. At the ends of the
+         history the respective button greys out again (no wrap).
+[ ] A24. After going Back a few steps, navigate somewhere NEW -> the forward tail
+         is dropped (">" greys); the new view is appended. History caps at 100
+         (oldest views fall off; no unbounded growth).
 
 --------------------------------------------------------------------------
 ## B. COMMAND LINE  -  standalone, ready now

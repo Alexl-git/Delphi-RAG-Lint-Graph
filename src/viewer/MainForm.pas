@@ -50,6 +50,8 @@ type
     FShowAllBtn: TButton;
     FZoomBar:    TTrackBar;
     FFitBtn:     TButton;
+    FBackBtn:    TButton;     { v0.48: graph nav-history back }
+    FFwdBtn:     TButton;     { v0.48: graph nav-history forward }
     FCrumbBar:   TPanel;
     FSyncingZoom: Boolean;
     FVM:         IGraphViewModel;
@@ -83,6 +85,13 @@ type
     FModeBtn:     TButton;     { Brief <-> Expanded }
     FEnterFlowBtn: TButton;    { enter flow from the selected graph node }
     FSelectedGraphId: string;  { id of the currently selected graph node }
+    { v0.48: graph navigation history -- the sequence of centered graph-ids, so a
+      Back/Forward pair can revisit prior views (e.g. as the editor-sync switches
+      the graph with the active unit). Capped; FNavigating suppresses re-recording
+      while Back/Forward themselves re-center. }
+    FNavHist:    TStringList;
+    FNavPos:     Integer;
+    FNavigating: Boolean;
     FMiTFlow:     TMenuItem;   { "Trace flow from here" }
     procedure FlowBtnClick(Sender: TObject);
     procedure ModeBtnClick(Sender: TObject);
@@ -105,6 +114,12 @@ type
     procedure DoSearch;
     procedure BuildSearchResults(const ATerm: string; APartial: Boolean);
     function  UnitNameOf(ANodeIdx: Integer): string;
+    { v0.48: graph navigation history }
+    procedure NavTo(const AGraphId: string);
+    procedure RecordNav(const AGraphId: string);
+    procedure BackClick(Sender: TObject);
+    procedure FwdClick(Sender: TObject);
+    procedure UpdateNavButtons;
     { Tree context menu }
     procedure TreeContextPopup(Sender: TObject; MousePos: TPoint;
       var Handled: Boolean);
@@ -242,6 +257,8 @@ begin
   StartParentExitWatch(Cardinal(StrToInt64Def(GetParamValue('--parent-pid'), 0)));
 
   FStructTags := TObjectList<TStructTag>.Create(True);
+  FNavHist := TStringList.Create;   { v0.48: nav history }
+  FNavPos  := -1;
   CreateControls;
   ParseDbArgs;
   OnShow := FormShow;
@@ -260,6 +277,7 @@ begin
   FFlowBuilder.Free;
   FFlowSource := nil;
   FStructTags.Free;
+  FNavHist.Free;
   inherited;
 end;
 
@@ -295,6 +313,33 @@ begin
   FFitBtn.Left    := ClientWidth - ZOOM_BAR_W - FIT_BTN_W - MARGIN * 2;
   FFitBtn.Caption := 'Fit';
   FFitBtn.OnClick := FitBtnClick;
+
+  { v0.48: graph navigation history -- Back / Forward, left of Fit. }
+  FBackBtn := TButton.Create(Self);
+  FBackBtn.Parent  := Self;
+  FBackBtn.Anchors := [akTop, akRight];
+  FBackBtn.Width   := 30;
+  FBackBtn.Height  := FIT_BTN_H;
+  FBackBtn.Top     := MARGIN;
+  FBackBtn.Left    := FFitBtn.Left - 2 * (30 + MARGIN);
+  FBackBtn.Caption := '<';
+  FBackBtn.Hint    := 'Back -- previous graph view';
+  FBackBtn.ShowHint := True;
+  FBackBtn.Enabled := False;
+  FBackBtn.OnClick := BackClick;
+
+  FFwdBtn := TButton.Create(Self);
+  FFwdBtn.Parent  := Self;
+  FFwdBtn.Anchors := [akTop, akRight];
+  FFwdBtn.Width   := 30;
+  FFwdBtn.Height  := FIT_BTN_H;
+  FFwdBtn.Top     := MARGIN;
+  FFwdBtn.Left    := FFitBtn.Left - (30 + MARGIN);
+  FFwdBtn.Caption := '>';
+  FFwdBtn.Hint    := 'Forward -- next graph view';
+  FFwdBtn.ShowHint := True;
+  FFwdBtn.Enabled := False;
+  FFwdBtn.OnClick := FwdClick;
 
   { Vertical zoom slider - anchored right, runs top to bottom }
   FZoomBar := TTrackBar.Create(Self);
@@ -1031,7 +1076,7 @@ begin
   { Show the selected item in the graph (reveal + center). }
   FSyncingTree := True;
   try
-    FGraph.CenterOnNode(Tag.GraphId);
+    NavTo(Tag.GraphId);   { v0.48: center + record in nav history }
   finally
     FSyncingTree := False;
   end;
@@ -1054,6 +1099,72 @@ begin
     BuildStructureRoots
   else
     BuildSearchResults(Term, FPartialChk.Checked);
+end;
+
+{ ---- v0.48: graph navigation history ---- }
+
+{ Center the graph on a node AND record it in the history (unless we are mid
+  Back/Forward, in which case re-centering must not push a new entry). This is the
+  single choke point user-initiated navigations route through. }
+procedure TfrmMain.NavTo(const AGraphId: string);
+begin
+  if (FGraph = nil) or (AGraphId = '') then Exit;
+  FGraph.CenterOnNode(AGraphId);
+  if not FNavigating then
+    RecordNav(AGraphId);
+end;
+
+procedure TfrmMain.RecordNav(const AGraphId: string);
+const
+  MAX_HIST = 100;
+begin
+  if FNavHist = nil then Exit;
+  { ignore a repeat of the current view }
+  if (FNavPos >= 0) and (FNavPos < FNavHist.Count) and
+     (FNavHist[FNavPos] = AGraphId) then Exit;
+  { branching forward truncates the redo tail }
+  while FNavHist.Count > FNavPos + 1 do
+    FNavHist.Delete(FNavHist.Count - 1);
+  FNavHist.Add(AGraphId);
+  { cap the ring -- drop the oldest views past MAX_HIST }
+  while FNavHist.Count > MAX_HIST do
+    FNavHist.Delete(0);
+  FNavPos := FNavHist.Count - 1;
+  UpdateNavButtons;
+end;
+
+procedure TfrmMain.BackClick(Sender: TObject);
+begin
+  if (FNavHist = nil) or (FNavPos <= 0) then Exit;
+  Dec(FNavPos);
+  FNavigating := True;
+  try
+    FGraph.CenterOnNode(FNavHist[FNavPos]);
+  finally
+    FNavigating := False;
+  end;
+  UpdateNavButtons;
+end;
+
+procedure TfrmMain.FwdClick(Sender: TObject);
+begin
+  if (FNavHist = nil) or (FNavPos >= FNavHist.Count - 1) then Exit;
+  Inc(FNavPos);
+  FNavigating := True;
+  try
+    FGraph.CenterOnNode(FNavHist[FNavPos]);
+  finally
+    FNavigating := False;
+  end;
+  UpdateNavButtons;
+end;
+
+procedure TfrmMain.UpdateNavButtons;
+begin
+  if FBackBtn <> nil then
+    FBackBtn.Enabled := (FNavHist <> nil) and (FNavPos > 0);
+  if FFwdBtn <> nil then
+    FFwdBtn.Enabled := (FNavHist <> nil) and (FNavPos < FNavHist.Count - 1);
 end;
 
 function TfrmMain.UnitNameOf(ANodeIdx: Integer): string;
@@ -1206,7 +1317,7 @@ end;
 
 procedure TfrmMain.TreeCtxCenter(Sender: TObject);
 begin
-  if FGraph <> nil then FGraph.CenterOnNode(FTreeCtxId);
+  NavTo(FTreeCtxId);   { v0.48: center + record in nav history }
 end;
 
 { ---- flow mode ---------------------------------------------------------- }
