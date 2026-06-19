@@ -38,6 +38,7 @@ uses
   , DragLint.Graph.Flow.Source.Db
   , DragLint.Graph.Flow.ViewModel
   , DragLint.Graph.FlowControl
+  , System.Win.Registry
   ;
 
 const
@@ -143,6 +144,10 @@ type { Structure-tree node descriptor (attached to each TTreeNode.Data).  The tr
       procedure ResolveDbsFromEngine;
       procedure RunLoad;
       procedure FormShow(Sender: TObject);
+      { v0.49: publish/clear this viewer's window handle in the registry so the
+        IDE plugin can find a STANDALONE viewer (not just an embedded one) for
+        editor-sync, and idle when no viewer is registered. }
+      procedure PublishViewerHwnd(APublish: Boolean);
       procedure WMLoadGraph(var Msg: TMessage   ); message WM_LOADGRAPH;
       procedure WMCopyData (var Msg: TWMCopyData); message WM_COPYDATA;
       procedure WMSelfTest (var Msg: TMessage   ); message WM_SELFTEST;
@@ -272,6 +277,7 @@ end; // constructor
 
 destructor TfrmMain.Destroy;
 begin
+  if HandleAllocated then PublishViewerHwnd(False);   { v0.49: stop advertising to the plugin }
   { Flow VM/builder/source are NOT owned by the form -- free them here, before
     inherited.  FFlowControl is form-owned and freed during inherited, and its
     destructor clears the VM's OnChanged -- so we must detach the control from
@@ -723,6 +729,38 @@ begin
   begin
     FLoaded:= True;
     PostMessage(Handle, WM_LOADGRAPH, 0, 0);
+    PublishViewerHwnd(True);   { v0.49: discoverable by the IDE plugin (editor-sync) }
+  end;
+end;
+
+procedure TfrmMain.PublishViewerHwnd(APublish: Boolean);
+const
+  KEY  = 'Software\DragLint';
+  NAME = 'GraphViewerHwnd';
+var
+  Reg: TRegistry;
+begin
+  { Best-effort: never let registry I/O disturb the viewer. The plugin reads this
+    value, validates with IsWindow, and idles when it is absent/stale. }
+  try
+    Reg:= TRegistry.Create(KEY_READ or KEY_WRITE);
+    try
+      Reg.RootKey:= HKEY_CURRENT_USER;
+      if APublish then
+      begin
+        if Reg.OpenKey(KEY, True) then
+          Reg.WriteInteger(NAME, Integer(Handle));   { HWNDs fit in 32 bits }
+      end
+      else if Reg.OpenKey(KEY, False) then
+      begin
+        { only clear if WE are the registered viewer (don't clobber another) }
+        if Reg.ValueExists(NAME) and (Reg.ReadInteger(NAME) = Integer(Handle)) then
+          Reg.DeleteValue(NAME);
+      end;
+    finally
+      Reg.Free;
+    end;
+  except
   end;
 end;
 
