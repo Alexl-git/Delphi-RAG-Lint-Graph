@@ -38,9 +38,11 @@ type
       FMoreRects  : TList<TRect>    ; { per-step "... N more" hit rect }
       FContentH   : Integer         ;
       FOnSelect   : TFlowSymbolEvent;
+      FMeasure    : TBitmap         ; { offscreen canvas for word-wrap measuring }
       procedure PaintBoxPaint(Sender: TObject);
       procedure PaintBoxMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
       procedure VMChanged(Sender: TObject);
+      function WrapLine(const S: string; ABold: Boolean): TArray<string>;
       function BoxLines(AIndex: Integer): TArray<string>;
       procedure Relayout;
     public
@@ -52,6 +54,9 @@ type
       procedure Attach(AVM: TFlowViewModel);
       /// <summary>Fired when the user selects a resolved flow box (not external).</summary>
       property OnSelectSymbol: TFlowSymbolEvent read FOnSelect write FOnSelect;
+      /// <summary>One-line self-diagnostic: box count + widest wrapped line vs the
+      ///  box text width + how many lines overflow (0 = wrapping OK). For --selftest.</summary>
+      function DiagDump: string;
   end;
 
 implementation
@@ -72,6 +77,9 @@ begin
   FBoxRects   := TList<TRect>.Create;
   FToggleRects:= TList<TRect>.Create;
   FMoreRects  := TList<TRect>.Create;
+  FMeasure    := TBitmap.Create;
+  FMeasure.SetSize(8, 8);            { a real DC so TextWidth works outside paint }
+  FMeasure.Canvas.Font.Assign(Font);
   BorderStyle:= bsNone;
   Color      := clWindow;
   FPaint:= TPaintBox.Create(Self);
@@ -85,6 +93,7 @@ begin
   { Detach from the VM so a VM that outlives this control never calls back
     into a freed instance (the VM may be owned elsewhere). }
   if FVM <> nil then FVM.OnChanged:= nil;
+  FMeasure.Free;
   FMoreRects.Free;
   FToggleRects.Free;
   FBoxRects.Free;
@@ -107,25 +116,81 @@ begin
   FPaint.Invalidate;
 end;
 
+function TFlowChartControl.WrapLine(const S: string; ABold: Boolean): TArray<string>;
+{ Greedy word-wrap of S to the box text width, so long signatures/summaries no
+  longer overflow the box. Measures on the offscreen FMeasure canvas (the
+  TPaintBox canvas is only valid during OnPaint). A single over-long word is
+  hard-broken. The head line is measured bold (it is painted bold). }
+const
+  MAX_PX = BOX_W - 2 * BOX_PAD;
+var
+  Cv   : TCanvas      ;
+  Words: TArray<string>;
+  Cur  : string       ;
+  Test : string       ;
+  Cut  : Integer      ;
+  I    : Integer      ;
+  L    : TList<string>;
+begin
+  Cv:= FMeasure.Canvas;
+  if ABold then Cv.Font.Style:= [fsBold] else Cv.Font.Style:= [];
+  if (S = '') or (Cv.TextWidth(S) <= MAX_PX) then
+  begin
+    SetLength(Result, 1); Result[0]:= S; Exit;
+  end;
+  L:= TList<string>.Create;
+  try
+    Words:= S.Split([' ']);
+    Cur:= '';
+    for I:= 0 to High(Words) do
+    begin
+      if Cur = '' then Test:= Words[I] else Test:= Cur + ' ' + Words[I];
+      if Cv.TextWidth(Test) <= MAX_PX then Cur:= Test
+      else
+      begin
+        if Cur <> '' then begin L.Add(Cur); Cur:= ''; end;
+        { a single word wider than the box -> hard-break it across lines }
+        Cur:= Words[I];
+        while Cv.TextWidth(Cur) > MAX_PX do
+        begin
+          Cut:= Length(Cur);
+          while (Cut > 1) and (Cv.TextWidth(Copy(Cur, 1, Cut)) > MAX_PX) do Dec(Cut);
+          L.Add(Copy(Cur, 1, Cut));
+          Cur:= Copy(Cur, Cut + 1, MaxInt);
+        end;
+      end;
+    end;
+    if Cur <> '' then L.Add(Cur);
+    Result:= L.ToArray;
+  finally
+    L.Free;
+  end;
+end;
+
 function TFlowChartControl.BoxLines(AIndex: Integer): TArray<string>;
 var
   S         : TFlowStep    ;
   L         : TList<string>;
+  Raw       : TList<string>;
   P         : TDocParam    ;
   E         : TDocException;
   Expanded  : Boolean      ;
   Head      : string       ;
   SeeAlsoStr: string       ;
   I         : Integer      ;
+
+  procedure AddWrapped(const ALine: string; AHead: Boolean);
+  var Seg: string;
+  begin
+    for Seg in WrapLine(ALine, AHead) do Raw.Add(Seg);
+  end;
+
 begin
   S:= FVM.Tree.Steps[AIndex];
   L:= TList<string>.Create;
   try
     if S.IsExternal then
-    begin
-      L.Add(S.RawName + '  [external]');
-      Exit(L.ToArray);
-    end;
+      Exit(WrapLine(S.RawName + '  [external]', True));
 
     if S.Signature <> '' then Head:= S.Signature
     else Head:= S.SymbolId;
@@ -161,11 +226,48 @@ begin
       line index. Do not append anything after this. }
     if S.TruncatedChildren > 0 then L.Add('  ... ' + IntToStr(S.TruncatedChildren) + ' more');
 
-    Result:= L.ToArray;
+    { Word-wrap every logical line to the box width; the first line is the bold
+      head. The "... N more" line stays last (it is short and never wraps), so
+      Relayout's last-line hit-rect still lands on it. }
+    Raw:= TList<string>.Create;
+    try
+      for I:= 0 to L.Count - 1 do AddWrapped(L[I], I = 0);
+      Result:= Raw.ToArray;
+    finally
+      Raw.Free;
+    end;
   finally
     L.Free;
   end; // try
 end; // function
+
+function TFlowChartControl.DiagDump: string;
+const
+  MAX_PX = BOX_W - 2 * BOX_PAD;
+var
+  I, J, MaxPx, W, Overflow: Integer;
+  Lines: TArray<string>;
+  Cv   : TCanvas;
+  Flag : string;
+begin
+  if (FVM = nil) or (not FVM.HasTree) then Exit('flow: no tree');
+  Cv:= FMeasure.Canvas;
+  MaxPx:= 0; Overflow:= 0;
+  for I:= 0 to High(FVM.Tree.Steps) do
+  begin
+    Lines:= BoxLines(I);
+    for J:= 0 to High(Lines) do
+    begin
+      if J = 0 then Cv.Font.Style:= [fsBold] else Cv.Font.Style:= [];
+      W:= Cv.TextWidth(Lines[J]);
+      if W > MaxPx then MaxPx:= W;
+      if W > MAX_PX then Inc(Overflow);
+    end;
+  end;
+  if Overflow = 0 then Flag:= 'OK' else Flag:= 'OVERFLOW';
+  Result:= Format('flow boxes=%d maxlinepx=%d boxtextpx=%d overflowlines=%d %s',
+    [Length(FVM.Tree.Steps), MaxPx, MAX_PX, Overflow, Flag]);
+end;
 
 procedure TFlowChartControl.Relayout;
 var

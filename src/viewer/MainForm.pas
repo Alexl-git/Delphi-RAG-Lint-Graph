@@ -42,6 +42,7 @@ uses
 
 const
   WM_LOADGRAPH = WM_USER + 100;
+  WM_SELFTEST  = WM_USER + 101;   { v0.49: deferred --flow/--selftest entry (posted after load) }
 
   { v0.48: editor-sync. The IDE plugin sends WM_COPYDATA with this magic in
     COPYDATASTRUCT.dwData and an ANSI symbol/unit name in lpData; the viewer
@@ -144,6 +145,7 @@ type { Structure-tree node descriptor (attached to each TTreeNode.Data).  The tr
       procedure FormShow(Sender: TObject);
       procedure WMLoadGraph(var Msg: TMessage   ); message WM_LOADGRAPH;
       procedure WMCopyData (var Msg: TWMCopyData); message WM_COPYDATA;
+      procedure WMSelfTest (var Msg: TMessage   ); message WM_SELFTEST;
       procedure GraphNodeClick(Sender: TObject; const A: TGraphNodeEventArgs);
       procedure GraphSelectionChanged(Sender: TObject);
       procedure GraphTraceFlow(Sender: TObject; const AId: string);
@@ -730,6 +732,33 @@ begin
   { Standalone only -- yanking foreground while embedded would steal focus
     from the IDE. }
   if FParentHwnd = 0 then SetForegroundWindow(Handle);
+  { v0.49: automation/self-test entry. --flow <qname> jumps straight into the
+    flow view for a symbol (handy for screenshots); --selftest <file> then writes
+    a one-line flow self-diagnostic and exits. Deferred one turn so layout/paint
+    settle. }
+  if GetParamValue('--flow') <> '' then
+    PostMessage(Handle, WM_SELFTEST, 0, 0);
+end;
+
+procedure TfrmMain.WMSelfTest(var Msg: TMessage);
+var
+  FlowSym, LogPath: string;
+begin
+  FlowSym:= GetParamValue('--flow');
+  if FlowSym <> '' then StartFlowFrom(FlowSym);
+
+  LogPath:= GetParamValue('--selftest');
+  if LogPath <> '' then
+  begin
+    try
+      TFile.WriteAllText(LogPath,
+        'symbol=' + FlowSym + #13#10 +
+        FFlowControl.DiagDump + #13#10, TEncoding.ASCII);
+    except
+      { never let diagnostics crash the viewer }
+    end;
+    Application.Terminate;   { headless self-test run -> exit }
+  end;
 end;
 
 procedure TfrmMain.RunLoad;
