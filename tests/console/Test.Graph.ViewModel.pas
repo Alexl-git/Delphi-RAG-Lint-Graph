@@ -467,11 +467,43 @@ begin
   CheckEqualsStr('uA', VM.DrillRootId, 'GoToSymbol on a unit drills into it');
 end;
 
+procedure Test_VMWhereUsedComposition;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  I, TgtIdx: Integer;
+  Found: Boolean;
+begin
+  { "Where Used" must leave a drill scope so callers in OTHER units become
+    visible to focus. This mirrors CtxWhereUsed's VM sequence: un-drill, show all
+    units, reveal + focus the target. Regression: while drilled into uA, focusing
+    a uB symbol highlighted nothing because uB was scoped out. }
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.DrillInto('uA');                       { user is drilled into uA }
+  CheckEqualsStr('uA', VM.DrillRootId, 'drilled into uA');
+
+  { CtxWhereUsed composition for a uB symbol: }
+  if VM.DrillRootId <> '' then VM.DrillToDepth(0);
+  VM.SetShowAllTopLevel(True);
+  VM.NavigateTo('uB.TB');
+  VM.SetFocus('uB.TB', 1);
+
+  CheckEqualsStr('', VM.DrillRootId, 'Where-Used left the drill scope');
+  Proj := VM.Projection;
+  TgtIdx := VM.Data.FindNodeIndex('uB.TB');
+  Found := False;
+  for I := 0 to High(Proj.Nodes) do
+    if Proj.Nodes[I].NodeIdx = TgtIdx then Found := True;
+  Check(Found, 'the uB target is visible (no longer scoped out) so focus can highlight it');
+end;
+
 initialization
   RegisterTest('VMLoadsViaSource', Test_VMLoadsViaSource);
   RegisterTest('VMNavigateEscapesDrill', Test_VMNavigateEscapesDrill);
   RegisterTest('VMDrillBackForward', Test_VMDrillBackForward);
   RegisterTest('VMGoToSymbolDrillsIntoUnit', Test_VMGoToSymbolDrillsIntoUnit);
+  RegisterTest('VMWhereUsedComposition', Test_VMWhereUsedComposition);
   RegisterTest('VMSelectionFiresEvent', Test_VMSelectionFiresEvent);
   RegisterTest('VMFlatProjection', Test_VMFlatProjection);
   RegisterTest('VMCollapseHidesDescendants', Test_VMCollapseHidesDescendants);

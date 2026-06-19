@@ -1135,14 +1135,20 @@ end;
 
 procedure TDragLintGraphControl.CtxWhereUsed(Sender: TObject);
 var
-  N: PGraphNode;
+  Id: string;
 begin
   if (FVM = nil) or (FContextNodeIdx < 0) then Exit;
-  N:= FVM.Data.NodeAt(FContextNodeIdx);
-  FVM.SetFocus(N.Id, 1); { dim to the 1-hop neighborhood }
+  Id:= FVM.Data.NodeAt(FContextNodeIdx).Id;
+  { Callers live in OTHER units. If we are drilled into one unit the neighborhood
+    is scoped out and focus highlights nothing -- so leave the drill and reveal
+    all top-level units, then reveal + focus the target's 1-hop neighborhood. }
+  if FVM.DrillRootId <> '' then FVM.DrillToDepth(0);
+  if not FVM.ShowAllTopLevel then FVM.SetShowAllTopLevel(True);
+  FVM.NavigateTo(Id);    { reveal + select the target }
+  FVM.SetFocus(Id, 1);   { dim to the 1-hop neighborhood }
   FFocusActive:= True;
   FProjValid  := False;
-  Invalidate;
+  Relayout;              { re-fit so the highlighted neighborhood frames }
   if Assigned(FOnViewChanged) then FOnViewChanged(Self);
 end;
 
@@ -1237,15 +1243,10 @@ begin
 end;
 
 procedure TDragLintGraphControl.WhereUsedFor(const AId: string);
-var
-  Idx: Integer;
 begin
   if FVM = nil then Exit;
-  Idx:= FVM.Data.FindNodeIndex(AId);
-  if Idx < 0 then Exit;
-  FVM.NavigateTo(AId); { reveal it first }
   FContextNodeIdx:= FVM.Data.FindNodeIndex(AId);
-  if FContextNodeIdx >= 0 then CtxWhereUsed(nil);
+  if FContextNodeIdx >= 0 then CtxWhereUsed(nil);   { un-drills + focuses }
 end;
 
 procedure TDragLintGraphControl.GoToInterfaceFor(const AId: string);
