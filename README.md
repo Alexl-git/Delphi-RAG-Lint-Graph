@@ -17,6 +17,27 @@ approach, which was declined in favour of a native VCL canvas solution.
 
 ---
 
+## Screenshots
+
+### UML class view, with doc on hover
+Search a type — it drills into its unit and draws the class as a UML box (members
+with visibility glyphs and full signatures); hover a member for its DocInsight doc.
+
+![UML class box for TCompileChecker with a member doc tooltip](docs/images/Graph_Find.png)
+
+### Code Flow View
+Trace a routine's calls as a flowchart — each box carries its DocInsight summary
+(here `TCompileChecker.Run`).
+
+![Code Flow View of TCompileChecker.Run with DocInsight summaries](docs/images/Graph_Calls_out.png)
+
+### Where Used
+A precise, clickable list of a symbol's callers, beside its unit's call graph.
+
+![Where-Used caller list for ResolveActiveIndexDbs](docs/images/Graph_Who_uses.png)
+
+---
+
 ## What it is
 
 - **`TDragLintGraphControl`** -- a passive VCL `TWinControl` you drop on a form
