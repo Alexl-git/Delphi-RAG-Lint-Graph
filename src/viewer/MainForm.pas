@@ -103,13 +103,6 @@ type { Structure-tree node descriptor (attached to each TTreeNode.Data).  The tr
       FModeBtn        : TButton          ; { Brief <-> Expanded }
       FEnterFlowBtn   : TButton          ; { enter flow from the selected graph node }
       FSelectedGraphId: string           ; { id of the currently selected graph node }
-      { v0.48: graph navigation history -- the sequence of centered graph-ids, so a
-      Back/Forward pair can revisit prior views (e.g. as the editor-sync switches
-      the graph with the active unit). Capped; FNavigating suppresses re-recording
-      while Back/Forward themselves re-center. }
-      FNavHist   : TStringList;
-      FNavPos    : Integer    ;
-      FNavigating: Boolean    ;
       FMiTFlow   : TMenuItem  ; { "Trace flow from here" }
       procedure FlowBtnClick(Sender: TObject);
       procedure ModeBtnClick(Sender: TObject);
@@ -130,9 +123,8 @@ type { Structure-tree node descriptor (attached to each TTreeNode.Data).  The tr
       procedure DoSearch;
       procedure BuildSearchResults(const ATerm: string; APartial: Boolean);
       function UnitNameOf(ANodeIdx: Integer): string;
-      { v0.48: graph navigation history }
+      { v0.49: graph navigation history (ViewModel-backed) }
       procedure NavTo    (const AGraphId: string);
-      procedure RecordNav(const AGraphId: string);
       procedure BackClick(Sender: TObject);
       procedure FwdClick (Sender: TObject);
       procedure UpdateNavButtons;
@@ -271,8 +263,6 @@ begin
   StartParentExitWatch(Cardinal(StrToInt64Def(GetParamValue('--parent-pid'), 0)));
 
   FStructTags:= TObjectList<TStructTag>.Create(True);
-  FNavHist:= TStringList.Create; { v0.48: nav history }
-  FNavPos:= -1;
   CreateControls;
   ParseDbArgs;
   OnShow:= FormShow;
@@ -290,7 +280,6 @@ begin
   FFlowBuilder.Free;
   FFlowSource:= nil;
   FStructTags.Free;
-  FNavHist.Free;
   inherited;
 end;
 
@@ -1070,64 +1059,36 @@ begin
   else BuildSearchResults(Term, FPartialChk.Checked);
 end;
 
-{ ---- v0.48: graph navigation history ---- }
+{ ---- v0.49: graph navigation history (unified, ViewModel-backed) ---- }
 
-{ Center the graph on a node AND record it in the history (unless we are mid
-  Back/Forward, in which case re-centering must not push a new entry). This is the
-  single choke point user-initiated navigations route through. }
+{ The ViewModel owns ONE back/forward history. Every move pushes an entry --
+  search/tree select, context Center, double-click, drill-in, level-up
+  (breadcrumb), cross-DB jump, editor-sync. NavTo just reveals + centers
+  (CenterOnNode records the entry); Back/Forward (buttons, mouse thumb buttons,
+  Backspace) traverse it via the control. }
 procedure TfrmMain.NavTo(const AGraphId: string);
 begin
   if (FGraph = nil) or (AGraphId = '') then Exit;
   FGraph.CenterOnNode(AGraphId);
-  if not FNavigating then RecordNav(AGraphId);
-end;
-
-procedure TfrmMain.RecordNav(const AGraphId: string);
-const
-  MAX_HIST = 100;
-begin
-  if FNavHist = nil then Exit;
-  { ignore a repeat of the current view }
-  if (FNavPos >= 0) and (FNavPos < FNavHist.Count) and (FNavHist[FNavPos] = AGraphId) then Exit;
-  { branching forward truncates the redo tail }
-  while FNavHist.Count > FNavPos + 1 do FNavHist.Delete(FNavHist.Count - 1);
-  FNavHist.Add(AGraphId);
-  { cap the ring -- drop the oldest views past MAX_HIST }
-  while FNavHist.Count > MAX_HIST do FNavHist.Delete(0);
-  FNavPos:= FNavHist.Count - 1;
   UpdateNavButtons;
 end;
 
 procedure TfrmMain.BackClick(Sender: TObject);
 begin
-  if (FNavHist = nil) or (FNavPos <= 0) then Exit;
-  Dec(FNavPos);
-  FNavigating:= True;
-  try
-    FGraph.CenterOnNode(FNavHist[FNavPos]);
-  finally
-    FNavigating:= False;
-  end;
+  if FGraph <> nil then FGraph.NavigateBack;
   UpdateNavButtons;
 end;
 
 procedure TfrmMain.FwdClick(Sender: TObject);
 begin
-  if (FNavHist = nil) or (FNavPos >= FNavHist.Count - 1) then Exit;
-  Inc(FNavPos);
-  FNavigating:= True;
-  try
-    FGraph.CenterOnNode(FNavHist[FNavPos]);
-  finally
-    FNavigating:= False;
-  end;
+  if FGraph <> nil then FGraph.NavigateForward;
   UpdateNavButtons;
 end;
 
 procedure TfrmMain.UpdateNavButtons;
 begin
-  if FBackBtn <> nil then FBackBtn.Enabled:= (FNavHist <> nil) and (FNavPos > 0);
-  if FFwdBtn <> nil then FFwdBtn.Enabled:= (FNavHist <> nil) and (FNavPos < FNavHist.Count - 1);
+  if FBackBtn <> nil then FBackBtn.Enabled:= (FVM <> nil) and FVM.CanGoBack;
+  if FFwdBtn  <> nil then FFwdBtn.Enabled := (FVM <> nil) and FVM.CanGoForward;
 end;
 
 { ---- v0.48: editor-sync (IDE -> graph) ---- }
@@ -1441,6 +1402,7 @@ procedure TfrmMain.GraphViewChanged(Sender: TObject);
 begin
   UpdateShowAllButton;
   UpdateBreadcrumbs;
+  UpdateNavButtons;   { Back/Forward enabled-state tracks the VM history }
 end;
 
 procedure TfrmMain.CrumbClick(Sender: TObject);

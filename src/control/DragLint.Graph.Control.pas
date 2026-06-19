@@ -249,9 +249,11 @@ type
       procedure CtxTraceFlow    (Sender: TObject);
       procedure CtxFit          (Sender: TObject);
       procedure CtxBack         (Sender: TObject);
-      { Go up one level: drill-up if drilled, else un-show-all, else VM Back.
-      Wired to Backspace, the mouse back thumb button, and the canvas menu. }
-      procedure NavigateBack;
+      { v0.49: AfterHistoryNav re-frames the view restored by Back/Forward;
+      CenterViewOn reveals + centers a node WITHOUT recording history (public
+      NavigateBack/NavigateForward do the history step). }
+      procedure AfterHistoryNav;
+      procedure CenterViewOn(const AId: string);
       { After the force pass, gather still-isolated visible nodes (no visible
       relation edge) and pack them into a tidy grid beside the connected
       cluster, so they do not fly to the edges (keeps Fit usable + labels
@@ -292,6 +294,11 @@ type
       tree item -> show it in the graph).  Selects it too, and pans so it is at
       the screen center.  No-op if the id is not a placed node. }
       procedure CenterOnNode(const AId: string);
+      { v0.49: traverse the unified nav history (toolbar buttons / mouse thumb
+      buttons / Backspace). Drill-ins, level-ups and searches push entries; these
+      only move the cursor through them and re-frame the restored view. }
+      procedure NavigateBack;
+      procedure NavigateForward;
       { Context actions addressable by id, so the structure panel's right-click
       menu invokes the SAME operations as the graph's own context menu. }
       procedure WhereUsedFor    (const AId: string);
@@ -1086,7 +1093,7 @@ begin
   FMiCenter   .Visible:= FContextNodeIdx >= 0;
   FMiTraceFlow.Visible:= FContextNodeIdx >= 0;
   FMiSep      .Visible:= FContextNodeIdx >= 0;
-  FMiBack.Enabled:= (FVM <> nil) and ((Length(FVM.DrillPath) > 0) or FVM.ShowAllTopLevel or FVM.CanGoBack);
+  FMiBack.Enabled:= (FVM <> nil) and FVM.CanGoBack;   { pure history Back }
 
   if FContextNodeIdx >= 0 then
   begin
@@ -1183,14 +1190,15 @@ begin
   if Assigned(FOnTraceFlow) and (N.Id <> '') then FOnTraceFlow(Self, N.Id);
 end;
 
-procedure TDragLintGraphControl.CenterOnNode(const AId: string);
+procedure TDragLintGraphControl.CenterViewOn(const AId: string);
+{ Reveal AId (un-collapse ancestors via the projection), settle the layout and
+  center the viewport on it at a readable zoom -- WITHOUT recording nav history.
+  The history-recording reveal is FVM.NavigateTo (see CenterOnNode). }
 var
   Idx: Integer   ;
   N  : PGraphNode;
 begin
   if (FVM = nil) or (AId = '') then Exit;
-  { make sure the node is revealed + selected first }
-  FVM.NavigateTo(AId);
   FProjValid:= False;
   EnsureLayout(False); { seed/settle any newly revealed nodes so X/Y are real }
   Idx:= FVM.Data.FindNodeIndex(AId);
@@ -1198,10 +1206,9 @@ begin
   N:= FVM.Data.NodeAt(Idx);
   FOffsetX:= N.X; { FOffsetX/Y is the world point at screen center }
   FOffsetY:= N.Y;
-  { NavigateTo -> HandleVMChanged -> EnsureLayout may have FitToWindow'd the
-    whole revealed set, leaving the zoom so far out the selected node is an
-    invisible dot.  Bring it to a readable zoom so the highlight is obviously
-    visible (only when currently zoomed too far out; keep a closer zoom). }
+  { A fresh projection may have FitToWindow'd the whole revealed set, leaving the
+    zoom so far out the selected node is an invisible dot. Bring it to a readable
+    zoom (only when currently zoomed too far out; keep a closer zoom). }
   if FZoom < 0.9 then
   begin
     FZoom:= 1.0;
@@ -1211,6 +1218,13 @@ begin
   if Assigned(FOnZoomChanged    ) then FOnZoomChanged    (Self);
   if Assigned(FOnSelectionChange) then FOnSelectionChange(Self);
 end; // procedure
+
+procedure TDragLintGraphControl.CenterOnNode(const AId: string);
+begin
+  if (FVM = nil) or (AId = '') then Exit;
+  FVM.NavigateTo(AId);   { reveal + select + record history }
+  CenterViewOn(AId);     { then frame it (no extra history) }
+end;
 
 procedure TDragLintGraphControl.WhereUsedFor(const AId: string);
 var
@@ -1248,27 +1262,53 @@ end;
 
 procedure TDragLintGraphControl.NavigateBack;
 begin
-  if FVM = nil then Exit;
-  { One predictable "up": leave a drill level, else collapse a show-all, else
-    pop the neighborhood-nav stack.  Nothing left to do -> no-op. }
-  if Length(FVM.DrillPath) > 0 then FVM.DrillToDepth(Length(FVM.DrillPath) - 1)
-  else if FVM.ShowAllTopLevel then FVM.SetShowAllTopLevel(False)
-  else if FVM.CanGoBack then FVM.Back
-  else Exit;
+  { Pure history Back: drill-ins, level-ups and searches all pushed an entry, so
+    one step back faithfully undoes whichever it was. }
+  if (FVM = nil) or not FVM.CanGoBack then Exit;
+  FVM.Back;
+  AfterHistoryNav;
+end;
+
+procedure TDragLintGraphControl.NavigateForward;
+begin
+  if (FVM = nil) or not FVM.CanGoForward then Exit;
+  FVM.Forward;
+  AfterHistoryNav;
+end;
+
+procedure TDragLintGraphControl.AfterHistoryNav;
+{ Re-frame the view restored by Back/Forward: center on the restored selection if
+  it is on screen, else fit the whole restored projection. }
+begin
   FProjValid:= False;
-  Relayout; { re-settle + Fit so the parent view frames }
+  if (FVM.SelectedId <> '') and (FVM.Data.FindNodeIndex(FVM.SelectedId) >= 0) then
+    CenterViewOn(FVM.SelectedId)
+  else
+  begin
+    EnsureLayout(False);
+    FitToWindow;
+  end;
   if Assigned(FOnViewChanged) then FOnViewChanged(Self);
 end;
 
 procedure TDragLintGraphControl.WMXButtonUp(var Msg: TMessage);
 const
-  XBUTTON1 = $0001; { the "back" thumb button }
+  XBUTTON1 = $0001; { back thumb button }
+  XBUTTON2 = $0002; { forward thumb button }
+var
+  Which: Word;
 begin
   inherited;
-  { HiWord(wParam) says which X button; treat the back thumb as "up one". }
-  if HiWord(LongWord(Msg.WParam)) and XBUTTON1 <> 0 then
+  { HiWord(wParam) says which X button was released. }
+  Which:= HiWord(LongWord(Msg.WParam));
+  if Which and XBUTTON1 <> 0 then
   begin
     NavigateBack;
+    Msg.Result:= 1;
+  end
+  else if Which and XBUTTON2 <> 0 then
+  begin
+    NavigateForward;
     Msg.Result:= 1;
   end;
 end;
@@ -2328,7 +2368,7 @@ begin
     end;
     VK_BACK:
     begin
-      if FVM.CanGoBack then FVM.Back;
+      NavigateBack;   { history Back + re-frame (Backspace) }
       Key:= 0;
     end;
   end; // case

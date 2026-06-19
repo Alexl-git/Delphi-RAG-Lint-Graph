@@ -82,7 +82,9 @@ type
     function ResolveCrossDb(const AName: string): TCrossDbResolution;
     procedure JumpToCrossDb(const AName: string);
     procedure Back;
+    procedure Forward;
     function CanGoBack: Boolean                                                             ;
+    function CanGoForward: Boolean                                                          ;
     function ResolveCref(const AText: string): TCrefResolution                              ;
     function LocateSymbol(const AId: string; out AFile: string; out ALine: Integer): Boolean;
     procedure SetOnStoreChanged(AValue: TGraphVMNotify);
@@ -118,7 +120,8 @@ type
       FFocusId             : string                      ;
       FFocusHops           : Integer                     ;
       FIsolate             : Boolean                     ;
-      FNavStack            : TStack<TNavEntry>           ;
+      FNavStack            : TList<TNavEntry>            ; { back history (capped) }
+      FNavFwd              : TList<TNavEntry>            ; { forward history (capped) }
       FDrillPath           : TList<string>               ; { containment drill roots; empty = project }
       FOnStoreChanged      : TGraphVMNotify              ;
       FRestoring           : Boolean                     ;
@@ -138,6 +141,9 @@ type
       function CaptureState: TNavEntry;
       procedure RestoreState(const AEntry: TNavEntry);
       procedure ExpandAncestors(const AId: string);
+      function IsWithinDrill(const AId: string): Boolean;
+      procedure PushNav(AList: TList<TNavEntry>; const AEntry: TNavEntry);
+      function PopNav(AList: TList<TNavEntry>): TNavEntry;
     public
       constructor Create;
       destructor Destroy; override;
@@ -172,7 +178,9 @@ type
       function ResolveCrossDb(const AName: string): TCrossDbResolution;
       procedure JumpToCrossDb(const AName: string);
       procedure Back;
+      procedure Forward;
       function CanGoBack: Boolean                                                             ;
+      function CanGoForward: Boolean                                                          ;
       function ResolveCref(const AText: string): TCrefResolution                              ;
       function LocateSymbol(const AId: string; out AFile: string; out ALine: Integer): Boolean;
       procedure SetOnStoreChanged (AValue: TGraphVMNotify);
@@ -197,7 +205,8 @@ begin
   FFocusId  := '';
   FFocusHops:= 1;
   FIsolate  := False;
-  FNavStack:= TStack<TNavEntry>.Create;
+  FNavStack:= TList<TNavEntry>.Create;
+  FNavFwd  := TList<TNavEntry>.Create;
   FDrillPath:= TList<string>.Create;
   FRestoring           := False;
   FShowAllTopLevel     := False;
@@ -209,6 +218,7 @@ end; // constructor
 destructor TGraphViewModel.Destroy;
 begin
   FNavStack.Free;
+  FNavFwd.Free;
   FDrillPath.Free;
   FCollapsed.Free;
   FData.Free;
@@ -233,6 +243,8 @@ begin
     FCollapsed.Clear;
     FFocusId:= '';
     FDrillPath.Clear;
+    if FNavStack <> nil then FNavStack.Clear;   { fresh graph -> fresh history }
+    if FNavFwd   <> nil then FNavFwd.Clear;
   end;
   FData.Clear;
   if FSource <> nil then FSource.LoadTopology(FData);
@@ -658,11 +670,12 @@ var
   Key: string       ;
   L  : TList<string>;
 begin
-  Result.StoreIndex:= FActiveStore;
-  Result.SelectedId:= FSelectedId;
-  Result.FocusId   := FFocusId;
-  Result.FocusHops := FFocusHops;
-  Result.Isolate   := FIsolate;
+  Result.StoreIndex := FActiveStore;
+  Result.SelectedId := FSelectedId;
+  Result.FocusId    := FFocusId;
+  Result.FocusHops  := FFocusHops;
+  Result.Isolate    := FIsolate;
+  Result.DrillRootId:= DrillRootId;   { snapshot the drill scope so Back restores it }
   L:= TList<string>.Create;
   try
     for Key in FCollapsed.Keys do L.Add(Key);
@@ -691,6 +704,9 @@ begin
   FFocusHops := AEntry.FocusHops;
   FIsolate   := AEntry.Isolate;
   FSelectedId:= AEntry.SelectedId;
+  { restore the drill scope (single-level drill -> at most one root). }
+  FDrillPath.Clear;
+  if AEntry.DrillRootId <> '' then FDrillPath.Add(AEntry.DrillRootId);
   DoChanged;
   DoSelectionChanged;
 end; // procedure
@@ -710,9 +726,50 @@ begin
   end;
 end;
 
+procedure TGraphViewModel.PushNav(AList: TList<TNavEntry>; const AEntry: TNavEntry);
+const
+  NAV_HIST_MAX = 100;   { ~100 steps; oldest entries fall off past that }
+begin
+  AList.Add(AEntry);
+  while AList.Count > NAV_HIST_MAX do AList.Delete(0);
+end;
+
+function TGraphViewModel.PopNav(AList: TList<TNavEntry>): TNavEntry;
+begin
+  Result:= AList.Last;
+  AList.Delete(AList.Count - 1);
+end;
+
+function TGraphViewModel.IsWithinDrill(const AId: string): Boolean;
+{ True when AId is reachable in the current drill scope -- i.e. there is no drill
+  root, or AId is a (strict) descendant of it. Walks AId's ancestors. }
+var
+  Idx, Guard: Integer;
+  Root: string;
+begin
+  Root:= DrillRootId;
+  if Root = '' then Exit(True);   { no drill -> whole project is in scope }
+  Idx:= FData.FindNodeIndex(AId);
+  Guard:= 0;
+  while (Idx >= 0) and (Guard < 256) do
+  begin
+    Idx:= FData.ParentIndexOf(Idx);
+    if (Idx >= 0) and SameText(FData.NodeAt(Idx).Id, Root) then Exit(True);
+    Inc(Guard);
+  end;
+  Result:= False;
+end;
+
 procedure TGraphViewModel.NavigateTo(const AId: string);
 begin
-  FNavStack.Push(CaptureState);
+  PushNav(FNavStack, CaptureState);   { record where we were (Back target) }
+  FNavFwd.Clear;                      { a new navigation branches -> drop redo }
+  { Search / editor-sync can target ANY node. The projection shows only the drill
+    root's subtree, so a target outside the current drill scope would stay hidden
+    (CenterOnNode then finds nothing to center). Pop the drill back to the project
+    so the target is reachable, then reveal it. }
+  if not IsWithinDrill(AId) then
+    FDrillPath.Clear;
   ExpandAncestors(AId);
   FCollapsed.Remove(AId);
   FSelectedId:= AId;
@@ -724,6 +781,8 @@ procedure TGraphViewModel.DrillInto(const AId: string);
 begin
   if AId = '' then Exit;
   if (FDrillPath.Count > 0) and (FDrillPath.Last = AId) then Exit;
+  PushNav(FNavStack, CaptureState);   { drill-in is undoable via Back }
+  FNavFwd.Clear;
   FDrillPath.Add   (AId);
   FCollapsed.Remove(AId); { expand the new root so its members are visible }
   FSelectedId:= AId;
@@ -746,6 +805,9 @@ procedure TGraphViewModel.DrillToDepth(ADepth: Integer);
 begin
   if ADepth < 0 then ADepth:= 0;
   if ADepth > FDrillPath.Count then Exit;
+  if ADepth = FDrillPath.Count then Exit;   { no change -> do not pollute history }
+  PushNav(FNavStack, CaptureState);          { level-up is a move -> Back can undo it }
+  FNavFwd.Clear;
   while FDrillPath.Count > ADepth do FDrillPath.Delete(FDrillPath.Count - 1);
   DoChanged;
   DoSelectionChanged;
@@ -763,7 +825,8 @@ var
 begin
   Res:= ResolveCrossDb(AName);
   if not Res.Found then Exit;
-  FNavStack.Push(CaptureState);
+  PushNav(FNavStack, CaptureState);
+  FNavFwd.Clear;
   if Res.StoreIndex <> FActiveStore then
   begin
     FRestoring:= True;
@@ -784,13 +847,29 @@ var
   Entry: TNavEntry;
 begin
   if FNavStack.Count = 0 then Exit;
-  Entry:= FNavStack.Pop;
+  PushNav(FNavFwd, CaptureState);   { current view becomes the Forward target }
+  Entry:= PopNav(FNavStack);
+  RestoreState(Entry);
+end;
+
+procedure TGraphViewModel.Forward;
+var
+  Entry: TNavEntry;
+begin
+  if FNavFwd.Count = 0 then Exit;
+  PushNav(FNavStack, CaptureState);
+  Entry:= PopNav(FNavFwd);
   RestoreState(Entry);
 end;
 
 function TGraphViewModel.CanGoBack: Boolean;
 begin
   Result:= FNavStack.Count > 0;
+end;
+
+function TGraphViewModel.CanGoForward: Boolean;
+begin
+  Result:= FNavFwd.Count > 0;
 end;
 
 function TGraphViewModel.ResolveCref(const AText: string): TCrefResolution;
