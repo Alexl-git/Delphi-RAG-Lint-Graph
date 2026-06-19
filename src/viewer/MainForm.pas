@@ -441,12 +441,14 @@ begin
   FSplitter:= TSplitter.Create(Self);
   FSplitter.Parent := Self;
   FSplitter.Align  := alLeft; { sits at the panel's right edge }
-  FSplitter.Width  := 6;
-  FSplitter.Beveled:= True; { visible grab strip }
-  FSplitter.Color:= TColor($00606060);
+  FSplitter.Width  := 8;      { wider grab strip -- easy to grab }
+  FSplitter.Beveled:= True;   { visible grab strip }
+  FSplitter.Color:= TColor($00909090);   { brighter so the slider is obvious }
   FSplitter.ParentColor:= False;
   FSplitter.MinSize    := 160;
   FSplitter.ResizeStyle:= rsUpdate; { live drag }
+  FSplitter.Hint       := 'Drag to resize the search panel';
+  FSplitter.ShowHint   := True;
 
   FGraph:= TDragLintGraphControl.Create(Self);
   FGraph.Parent           := Self;

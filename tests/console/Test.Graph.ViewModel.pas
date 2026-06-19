@@ -435,10 +435,43 @@ begin
   Check(not VM.CanGoForward, 'new navigation branches -> forward dropped');
 end;
 
+procedure Test_VMGoToSymbolDrillsIntoUnit;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  I, TgtIdx: Integer;
+  Found: Boolean;
+begin
+  { Searching a class "jumps into" its unit: the drill scope becomes the unit so
+    the class renders as a UML box (and the top-level unit cap is bypassed),
+    centered on the target. (Regression: search only revealed in place, so a
+    capped/hidden unit's class never appeared.) }
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.GoToSymbol('uB.TB');   { a class living in unit uB }
+  CheckEqualsStr('uB', VM.DrillRootId, 'drilled into the target''s unit');
+  CheckEqualsStr('uB.TB', VM.SelectedId, 'target class selected');
+  Check(VM.CanGoBack, 'GoToSymbol recorded a history step');
+
+  Proj := VM.Projection;
+  TgtIdx := VM.Data.FindNodeIndex('uB.TB');
+  Found := False;
+  for I := 0 to High(Proj.Nodes) do
+    if Proj.Nodes[I].NodeIdx = TgtIdx then Found := True;
+  Check(Found, 'target class is visible in the drilled-in projection');
+
+  { Back undoes the jump (un-drills); GoToSymbol on a unit drills into the unit. }
+  VM.Back;
+  CheckEqualsStr('', VM.DrillRootId, 'Back undoes the jump');
+  VM.GoToSymbol('uA');
+  CheckEqualsStr('uA', VM.DrillRootId, 'GoToSymbol on a unit drills into it');
+end;
+
 initialization
   RegisterTest('VMLoadsViaSource', Test_VMLoadsViaSource);
   RegisterTest('VMNavigateEscapesDrill', Test_VMNavigateEscapesDrill);
   RegisterTest('VMDrillBackForward', Test_VMDrillBackForward);
+  RegisterTest('VMGoToSymbolDrillsIntoUnit', Test_VMGoToSymbolDrillsIntoUnit);
   RegisterTest('VMSelectionFiresEvent', Test_VMSelectionFiresEvent);
   RegisterTest('VMFlatProjection', Test_VMFlatProjection);
   RegisterTest('VMCollapseHidesDescendants', Test_VMCollapseHidesDescendants);

@@ -1222,8 +1222,18 @@ end; // procedure
 procedure TDragLintGraphControl.CenterOnNode(const AId: string);
 begin
   if (FVM = nil) or (AId = '') then Exit;
-  FVM.NavigateTo(AId);   { reveal + select + record history }
-  CenterViewOn(AId);     { then frame it (no extra history) }
+  FVM.GoToSymbol(AId);   { drill into the target's unit + select + record history }
+  { If AId is itself the unit we drilled into, it is the scope root (not drawn) --
+    fit its contents. Otherwise center on the revealed type/member box. }
+  if SameText(FVM.DrillRootId, AId) then
+  begin
+    FProjValid:= False;
+    EnsureLayout(False);
+    FitToWindow;
+  end
+  else
+    CenterViewOn(AId);
+  if Assigned(FOnViewChanged) then FOnViewChanged(Self);
 end;
 
 procedure TDragLintGraphControl.WhereUsedFor(const AId: string);

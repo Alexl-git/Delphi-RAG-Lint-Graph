@@ -75,6 +75,7 @@ type
     function GetIsolate: Boolean;
     procedure SetIsolate(AValue: Boolean);
     procedure NavigateTo(const AId: string);
+    procedure GoToSymbol(const AId: string);
     procedure DrillInto (const AId: string);
     function DrillRootId: string      ;
     function DrillPath: TArray<string>;
@@ -142,6 +143,7 @@ type
       procedure RestoreState(const AEntry: TNavEntry);
       procedure ExpandAncestors(const AId: string);
       function IsWithinDrill(const AId: string): Boolean;
+      function UnitAncestorOf(const AId: string): string;
       procedure PushNav(AList: TList<TNavEntry>; const AEntry: TNavEntry);
       function PopNav(AList: TList<TNavEntry>): TNavEntry;
     public
@@ -171,6 +173,7 @@ type
       function GetIsolate: Boolean;
       procedure SetIsolate(AValue: Boolean);
       procedure NavigateTo(const AId: string);
+      procedure GoToSymbol(const AId: string);
       procedure DrillInto (const AId: string);
       function DrillRootId: string      ;
       function DrillPath: TArray<string>;
@@ -772,6 +775,44 @@ begin
     FDrillPath.Clear;
   ExpandAncestors(AId);
   FCollapsed.Remove(AId);
+  FSelectedId:= AId;
+  DoChanged;
+  DoSelectionChanged;
+end;
+
+function TGraphViewModel.UnitAncestorOf(const AId: string): string;
+{ The nkUnit ancestor of AId (or AId itself if it is a unit), '' if none. }
+var
+  Idx, Guard: Integer;
+begin
+  Result:= '';
+  Idx:= FData.FindNodeIndex(AId);
+  Guard:= 0;
+  while (Idx >= 0) and (Guard < 256) do
+  begin
+    if FData.NodeAt(Idx).Kind = nkUnit then Exit(FData.NodeAt(Idx).Id);
+    Idx:= FData.ParentIndexOf(Idx);
+    Inc(Guard);
+  end;
+end;
+
+procedure TGraphViewModel.GoToSymbol(const AId: string);
+{ "Jump to" a symbol the way a user expects from the search box: DRILL INTO the
+  symbol's unit so its types render as UML boxes (a focused view that also
+  bypasses the top-level unit cap), then reveal + select the target. Records one
+  history entry. If AId is itself a unit, drills into it; if it has no unit
+  (project/top-level), reveals it at project level. }
+var
+  UnitId: string;
+begin
+  if AId = '' then Exit;
+  PushNav(FNavStack, CaptureState);
+  FNavFwd.Clear;
+  UnitId:= UnitAncestorOf(AId);
+  FDrillPath.Clear;
+  if UnitId <> '' then FDrillPath.Add(UnitId);   { scope to the unit (AId itself if it is one) }
+  ExpandAncestors(AId);
+  FCollapsed.Remove(AId);   { un-collapse the target so its members show }
   FSelectedId:= AId;
   DoChanged;
   DoSelectionChanged;
