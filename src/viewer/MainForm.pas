@@ -29,6 +29,12 @@ uses
 const
   WM_LOADGRAPH = WM_USER + 100;
 
+  { v0.48: editor-sync. The IDE plugin sends WM_COPYDATA with this magic in
+    COPYDATASTRUCT.dwData and an ANSI symbol/unit name in lpData; the viewer
+    resolves it to a node and centers (recording nav history, so Back undoes an
+    editor-driven jump). Cross-process-safe constant -- only our plugin sends it. }
+  CD_CENTER_SYMBOL = $DA61C000;
+
 type
   { Structure-tree node descriptor (attached to each TTreeNode.Data).  The tree
     is lazy: each node knows just enough to populate its children on expand. }
@@ -120,6 +126,8 @@ type
     procedure BackClick(Sender: TObject);
     procedure FwdClick(Sender: TObject);
     procedure UpdateNavButtons;
+    { v0.48: editor-sync -- resolve an editor symbol/unit name to a graph node id }
+    function ResolveSymbolToGraphId(const ASymbol: string): string;
     { Tree context menu }
     procedure TreeContextPopup(Sender: TObject; MousePos: TPoint;
       var Handled: Boolean);
@@ -134,6 +142,7 @@ type
     procedure RunLoad;
     procedure FormShow(Sender: TObject);
     procedure WMLoadGraph(var Msg: TMessage); message WM_LOADGRAPH;
+    procedure WMCopyData(var Msg: TWMCopyData); message WM_COPYDATA;
     procedure GraphNodeClick(Sender: TObject; const A: TGraphNodeEventArgs);
     procedure GraphSelectionChanged(Sender: TObject);
     procedure GraphTraceFlow(Sender: TObject; const AId: string);
@@ -1165,6 +1174,93 @@ begin
     FBackBtn.Enabled := (FNavHist <> nil) and (FNavPos > 0);
   if FFwdBtn <> nil then
     FFwdBtn.Enabled := (FNavHist <> nil) and (FNavPos < FNavHist.Count - 1);
+end;
+
+{ ---- v0.48: editor-sync (IDE -> graph) ---- }
+
+{ Map an editor symbol/unit name to the id of the best-matching graph node, or ''
+  if none. The plugin may send a unit name ("MSCTYPES"), a qualified symbol
+  ("MSCTYPES.TPlanType") or a bare leaf ("TPlanType"); we score candidates so the
+  most specific match wins. Mirrors the search-box matching (BuildSearchResults). }
+function TfrmMain.ResolveSymbolToGraphId(const ASymbol: string): string;
+var
+  I, DotP, BestScore, Score: Integer;
+  Scope, Leaf, Sym: string;
+  N: PGraphNode;
+begin
+  Result := '';
+  if (FVM = nil) or (FVM.Data = nil) then Exit;
+  Sym := Trim(ASymbol);
+  if Sym = '' then Exit;
+
+  DotP := LastDelimiter('.', Sym);
+  if DotP > 0 then
+  begin
+    Scope := Copy(Sym, 1, DotP - 1);
+    Leaf  := Copy(Sym, DotP + 1, MaxInt);
+  end
+  else
+  begin
+    Scope := '';
+    Leaf  := Sym;
+  end;
+
+  BestScore := 0;
+  for I := 0 to FVM.Data.NodeCount - 1 do
+  begin
+    N := FVM.Data.NodeAt(I);
+    if (N.Kind = nkProject) or (N.Id = '@project') then Continue;
+
+    if SameText(N.Id, Sym) then
+      Score := 100                                    { exact qualified id }
+    else if SameText(N.Label_, Leaf) and
+            ((Scope = '') or ContainsText(N.Id, Scope)) then
+      Score := 60                                     { leaf name within scope }
+    else if (N.Kind = nkUnit) and SameText(N.Label_, Sym) then
+      Score := 50                                     { unit matched by name }
+    else if ContainsText(N.Id, Sym) then
+      Score := 20                                     { id substring fallback }
+    else
+      Score := 0;
+
+    if Score > BestScore then
+    begin
+      BestScore := Score;
+      Result := N.Id;
+      if Score = 100 then Exit;                       { cannot do better }
+    end;
+  end;
+end;
+
+{ The IDE plugin posts the active editor's unit/symbol here on tab-switch so the
+  graph follows the editor. Resolve + center via NavTo (records history, so the
+  Back button undoes an editor-driven jump). Ignores anything not addressed to us
+  (dwData magic) and unknown symbols (status hint only -- never disrupts the view). }
+procedure TfrmMain.WMCopyData(var Msg: TWMCopyData);
+var
+  A: AnsiString;
+  Sym, Gid: string;
+begin
+  Msg.Result := 0;
+  if Msg.CopyDataStruct = nil then Exit;
+  if Msg.CopyDataStruct.dwData <> CD_CENTER_SYMBOL then Exit;
+  if (Msg.CopyDataStruct.lpData = nil) or (Msg.CopyDataStruct.cbData = 0) then Exit;
+
+  SetString(A, PAnsiChar(Msg.CopyDataStruct.lpData), Msg.CopyDataStruct.cbData);
+  { tolerate a trailing NUL whether or not the sender counted it in cbData }
+  while (Length(A) > 0) and (A[Length(A)] = #0) do
+    SetLength(A, Length(A) - 1);
+  Sym := Trim(string(A));
+  if (Sym = '') or (FVM = nil) then Exit;
+
+  Gid := ResolveSymbolToGraphId(Sym);
+  if Gid <> '' then
+  begin
+    NavTo(Gid);
+    Msg.Result := 1;                                  { resolved + centered }
+  end
+  else if FStatus <> nil then
+    FStatus.SimpleText := Format('Editor sync: "%s" is not in this graph.', [Sym]);
 end;
 
 function TfrmMain.UnitNameOf(ANodeIdx: Integer): string;

@@ -96,6 +96,12 @@ clean now but in-IDE behaviour is unverified - install at your discretion.)
 [ ] C3. Tools -> drag-lint menu: Hover at Cursor, Symbol Search, etc.
 [ ] C4. Tools -> drag-lint -> "Dockable Panel (test)" -> a panel opens that you can
         dock/park at the bottom of the IDE like GExperts Grep (placeholder content).
+[ ] C5. EDITOR-SYNC: with the viewer running and the plugin loaded, switch the
+        active editor tab (or move the caret to another unit) -> the graph CENTERS
+        on that unit/symbol. The nav-history "<" Back button then undoes the
+        editor-driven jump (returns to the prior view). Switching to a unit that
+        isn't in the loaded graph shows "Editor sync: ... not in this graph." in
+        the status bar and leaves the view unchanged.
 
 --------------------------------------------------------------------------
 ## D. AUTOMATION  -  already live
@@ -103,6 +109,10 @@ clean now but in-IDE behaviour is unverified - install at your discretion.)
 [ ] D2. The "DragLint Daily Report" Windows task runs daily at 4:00 PM and emails a
         report: drag-lint-vs-Grep savings + GitHub activity across all 6 repos
         (downloads/stars/issues/traffic + day-over-day deltas). Next run: today 4 PM.
+[ ] D3. Editor-sync receiver smoke (no IDE): tests\autotest\wmcopydata_smoke.ps1
+        launches the viewer, sends WM_COPYDATA (valid/bogus/wrong-magic symbols),
+        and asserts the viewer survives + resolves the valid one. Exercises the
+        graph-side half of C5 in isolation.
 
 --------------------------------------------------------------------------
 NOTE: all code is committed LOCALLY and NOT pushed to GitHub (per your hold).
