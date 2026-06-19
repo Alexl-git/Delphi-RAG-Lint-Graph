@@ -300,9 +300,32 @@ begin
   FlowSrc := nil;
 end;
 
+procedure Test_Flow_DbSource_ClassAggregation;
+var
+  DbPath : string;
+  Cat    : IDbCatalog;
+  FlowSrc: IFlowSource;
+  Callees: TArray<TFlowCallee>;
+begin
+  { v0.49 class-level flow aggregation: a class/record/interface declaration makes
+    no calls of its own, but tracing flow from a CLASS should show the union of
+    its methods' calls. Verified on the real self-index (skipped if absent). }
+  DbPath := 'C:\Projects\.drag-lint\Delphi-RAG-lint.sqlite';
+  if not FileExists(DbPath) then Exit;
+
+  Cat := TDbCatalog.Create([DbPath]);
+  FlowSrc := TDbFlowSource.Create(Cat);
+  Callees := FlowSrc.GetCallees('DRagLint.Diagnostics.CompileCheck.TCompileChecker');
+  Check(Length(Callees) > 0,
+    'flow from the TCompileChecker CLASS aggregates its methods'' calls (was 0)');
+  Cat := nil;
+  FlowSrc := nil;
+end;
+
 initialization
   RegisterTest('Flow_OrderAndDedup',      Test_Flow_OrderAndDedup);
   RegisterTest('Flow_DbSource_MethodImplRange', Test_Flow_DbSource_MethodImplRange);
+  RegisterTest('Flow_DbSource_ClassAggregation', Test_Flow_DbSource_ClassAggregation);
   RegisterTest('Flow_Recursion',          Test_Flow_Recursion);
   RegisterTest('Flow_DepthCap',           Test_Flow_DepthCap);
   RegisterTest('Flow_BreadthCap',         Test_Flow_BreadthCap);
