@@ -9,17 +9,17 @@ unit DragLint.Graph.Source;
 interface
 
 uses
-  DragLint.Graph.Types;
+  DragLint.Graph.Types
+  ;
 
 type
   IGraphSource = interface
     ['{7A2E4C10-1B3D-4F6A-9C8E-2D5F0A1B3C4D}']
-    function StoreIndex: Integer;
-    function LoadTopology(AData: TGraphData): Boolean;
-    function GetDoc(const AQName: string): TGraphDoc;
-    function ResolveCref(const AText: string): TCrefResolution;
-    function LocateSymbol(const AQName: string; out AFile: string;
-      out ALine: Integer): Boolean;
+    function StoreIndex: Integer                                                               ;
+    function LoadTopology(AData: TGraphData): Boolean                                          ;
+    function GetDoc     (const AQName: string): TGraphDoc;
+    function ResolveCref(const AText : string): TCrefResolution;
+    function LocateSymbol(const AQName: string; out AFile: string; out ALine: Integer): Boolean;
     { Lightweight name lookup: exact qualified_name then bare name (kind-priority
       order).  Sets AQName to the found qualified_name and returns True on a
       first-hit match; returns False (AQName := '') when nothing found.
@@ -32,15 +32,14 @@ type
     function GetCallees(const AQName: string): TArray<TCallRef>;
     { Signature + modifiers + raw kind text for one symbol. False if absent.
       Used by the flow engine for the box header / degradation path. }
-    function GetSymbolMeta(const AQName: string;
-      out ASignature, AModifiers, AKindText: string): Boolean;
+    function GetSymbolMeta(const AQName: string; out ASignature, AModifiers, AKindText: string): Boolean;
   end;
 
   IDbCatalog = interface
     ['{3F9B1E22-6C4A-4D8B-A1E3-7B2C9D0E5F61}']
-    function StoreCount: Integer;
-    function StorePath(AIndex: Integer): string;
-    function SourceForStore(AIndex: Integer): IGraphSource;
+    function StoreCount: Integer                                         ;
+    function StorePath(AIndex: Integer): string                          ;
+    function SourceForStore(AIndex: Integer): IGraphSource               ;
     function ResolveAcrossStores(const AName: string): TCrossDbResolution;
   end;
 

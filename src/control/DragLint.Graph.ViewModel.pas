@@ -7,27 +7,29 @@ unit DragLint.Graph.ViewModel;
 interface
 
 uses
-  System.SysUtils, System.Generics.Collections,
-  DragLint.Graph.Types,
-  DragLint.Graph.Source;
+  System.SysUtils
+  , System  .Generics.Collections
+  , DragLint.Graph   .Types
+  , DragLint.Graph   .Source
+  ;
 
 type
   TProjNode = record
-    NodeIdx:   Integer;     { index into Data }
-    Collapsed: Boolean;     { collapsed and has children (drawn with +N badge) }
-    Dimmed:    Boolean;     { focus active and node outside neighborhood }
+    NodeIdx  : Integer; { index into Data }
+    Collapsed: Boolean; { collapsed and has children (drawn with +N badge) }
+    Dimmed   : Boolean; { focus active and node outside neighborhood }
   end;
 
   TProjEdge = record
-    SourceIdx:  Integer;    { representative visible node index }
-    TargetIdx:  Integer;
-    Kind:       TGraphEdgeKind;
-    Count:      Integer;    { underlying edges merged into this one }
-    Weight:     Double;
-    Aggregated: Boolean;    { Count>1 or mixed kinds }
-    Dimmed:     Boolean;
-    Section:    string;     { for ekUses: 'interface'|'implementation'|... }
-    CrossDb:    Boolean;    { target lives in a different store (P4: always False) }
+    SourceIdx : Integer       ; { representative visible node index }
+    TargetIdx : Integer       ;
+    Kind      : TGraphEdgeKind;
+    Count     : Integer       ; { underlying edges merged into this one }
+    Weight    : Double        ;
+    Aggregated: Boolean       ; { Count>1 or mixed kinds }
+    Dimmed    : Boolean       ;
+    Section   : string        ; { for ekUses: 'interface'|'implementation'|... }
+    CrossDb   : Boolean       ; { target lives in a different store (P4: always False) }
   end;
 
   TGraphProjection = record
@@ -36,54 +38,53 @@ type
   end;
 
   TNavEntry = record
-    StoreIndex: Integer;
-    SelectedId: string;
-    Collapsed:  TArray<string>;
-    FocusId:    string;
-    FocusHops:  Integer;
-    Isolate:    Boolean;
-    DrillRootId: string;   { containment drill-in root ('' = whole project) }
+    StoreIndex : Integer       ;
+    SelectedId : string        ;
+    Collapsed  : TArray<string>;
+    FocusId    : string        ;
+    FocusHops  : Integer       ;
+    Isolate    : Boolean       ;
+    DrillRootId: string        ; { containment drill-in root ('' = whole project) }
   end;
 
   TGraphVMNotify = procedure(Sender: TObject) of object;
 
   IGraphViewModel = interface
     ['{B1C2D3E4-F5A6-4B7C-8D9E-0A1B2C3D4E5F}']
-    procedure SetSource(const ASource: IGraphSource);
-    procedure SetCatalog(const ACatalog: IDbCatalog);
+    procedure SetSource (const ASource : IGraphSource);
+    procedure SetCatalog(const ACatalog: IDbCatalog  );
     procedure OpenStore(AStoreIndex: Integer);
-    function  ActiveStoreIndex: Integer;
-    function  Data: TGraphData;
-    function  Projection: TGraphProjection;
+    function ActiveStoreIndex: Integer;
+    function Data            : TGraphData;
+    function Projection      : TGraphProjection;
     procedure SelectNode(const AId: string);
-    function  SelectedId: string;
-    function  SelectedNodeIndex: Integer;
-    function  SelectedDoc: TGraphDoc;
-    function  DocFor(const AId: string): TGraphDoc;
-    procedure SetOnChanged(AValue: TGraphVMNotify);
+    function SelectedId: string                  ;
+    function SelectedNodeIndex: Integer;
+    function SelectedDoc      : TGraphDoc;
+    function DocFor(const AId: string): TGraphDoc;
+    procedure SetOnChanged         (AValue: TGraphVMNotify);
     procedure SetOnSelectionChanged(AValue: TGraphVMNotify);
-    procedure Collapse(const AId: string);
-    procedure Expand(const AId: string);
+    procedure Collapse      (const AId: string);
+    procedure Expand        (const AId: string);
     procedure ToggleCollapse(const AId: string);
     procedure CollapseAll;
     procedure ExpandAll;
-    function  IsCollapsed(const AId: string): Boolean;
+    function IsCollapsed(const AId: string): Boolean;
     procedure SetFocus(const AId: string; AHops: Integer = 1);
     procedure ClearFocus;
-    function  GetIsolate: Boolean;
+    function GetIsolate: Boolean;
     procedure SetIsolate(AValue: Boolean);
     procedure NavigateTo(const AId: string);
-    procedure DrillInto(const AId: string);
-    function  DrillRootId: string;
-    function  DrillPath: TArray<string>;
+    procedure DrillInto (const AId: string);
+    function DrillRootId: string      ;
+    function DrillPath: TArray<string>;
     procedure DrillToDepth(ADepth: Integer);
-    function  ResolveCrossDb(const AName: string): TCrossDbResolution;
+    function ResolveCrossDb(const AName: string): TCrossDbResolution;
     procedure JumpToCrossDb(const AName: string);
     procedure Back;
-    function  CanGoBack: Boolean;
-    function  ResolveCref(const AText: string): TCrefResolution;
-    function  LocateSymbol(const AId: string; out AFile: string;
-      out ALine: Integer): Boolean;
+    function CanGoBack: Boolean                                                             ;
+    function ResolveCref(const AText: string): TCrefResolution                              ;
+    function LocateSymbol(const AId: string; out AFile: string; out ALine: Integer): Boolean;
     procedure SetOnStoreChanged(AValue: TGraphVMNotify);
     { Top-level cap: limits the number of visible direct children of the
       project root to the top-N by descendant count (largest first).
@@ -96,94 +97,92 @@ type
       (10) units and hide the rest.  So with defaults: <=25 units -> all
       shown; >25 units -> show 10, rest hidden. }
     procedure SetShowAllTopLevel(AValue: Boolean);
-    function  ShowAllTopLevel: Boolean;
+    function ShowAllTopLevel: Boolean;
     procedure SetTopLevelLimit(AValue: Integer);
-    function  TopLevelLimit: Integer;
+    function TopLevelLimit: Integer;
     procedure SetTopLevelCapThreshold(AValue: Integer);
-    function  TopLevelCapThreshold: Integer;
-    function  HiddenTopLevelCount: Integer;
+    function TopLevelCapThreshold: Integer;
+    function HiddenTopLevelCount : Integer;
   end;
 
   TGraphViewModel = class(TInterfacedObject, IGraphViewModel)
-  strict private
-    FData:        TGraphData;
-    FSource:      IGraphSource;
-    FCatalog:     IDbCatalog;
-    FActiveStore: Integer;
-    FSelectedId:  string;
-    FOnChanged:   TGraphVMNotify;
-    FOnSelectionChanged: TGraphVMNotify;
-    FCollapsed:   TDictionary<string, Boolean>;
-    FFocusId:     string;
-    FFocusHops:   Integer;
-    FIsolate:     Boolean;
-    FNavStack:    TStack<TNavEntry>;
-    FDrillPath:   TList<string>;   { containment drill roots; empty = project }
-    FOnStoreChanged: TGraphVMNotify;
-    FRestoring:   Boolean;
-    FShowAllTopLevel:       Boolean;
-    FTopLevelLimit:         Integer;
-    FTopLevelCapThreshold:  Integer;
-    FHiddenTopLevelCount:   Integer;
-    procedure DoChanged;
-    procedure DoSelectionChanged;
-    procedure DoStoreChanged;
-    procedure Reload;
-    function NodeHasChildren(AIndex: Integer): Boolean;
-    function NodeIsCollapsed(AIndex: Integer): Boolean;
-    function NodeIsVisible(AIndex: Integer): Boolean;
-    function RepresentativeOf(AIndex: Integer): Integer;
-    procedure ComputeNeighborhood(AStart, AHops: Integer;
-      AEdges: TList<TProjEdge>; ASet: TDictionary<Integer, Boolean>);
-    function  CaptureState: TNavEntry;
-    procedure RestoreState(const AEntry: TNavEntry);
-    procedure ExpandAncestors(const AId: string);
-  public
-    constructor Create;
-    destructor Destroy; override;
-    procedure SetSource(const ASource: IGraphSource);
-    procedure SetCatalog(const ACatalog: IDbCatalog);
-    procedure OpenStore(AStoreIndex: Integer);
-    function  ActiveStoreIndex: Integer;
-    function  Data: TGraphData;
-    function  Projection: TGraphProjection;
-    procedure SelectNode(const AId: string);
-    function  SelectedId: string;
-    function  SelectedNodeIndex: Integer;
-    function  SelectedDoc: TGraphDoc;
-    function  DocFor(const AId: string): TGraphDoc;
-    procedure SetOnChanged(AValue: TGraphVMNotify);
-    procedure SetOnSelectionChanged(AValue: TGraphVMNotify);
-    procedure Collapse(const AId: string);
-    procedure Expand(const AId: string);
-    procedure ToggleCollapse(const AId: string);
-    procedure CollapseAll;
-    procedure ExpandAll;
-    function  IsCollapsed(const AId: string): Boolean;
-    procedure SetFocus(const AId: string; AHops: Integer = 1);
-    procedure ClearFocus;
-    function  GetIsolate: Boolean;
-    procedure SetIsolate(AValue: Boolean);
-    procedure NavigateTo(const AId: string);
-    procedure DrillInto(const AId: string);
-    function  DrillRootId: string;
-    function  DrillPath: TArray<string>;
-    procedure DrillToDepth(ADepth: Integer);
-    function  ResolveCrossDb(const AName: string): TCrossDbResolution;
-    procedure JumpToCrossDb(const AName: string);
-    procedure Back;
-    function  CanGoBack: Boolean;
-    function  ResolveCref(const AText: string): TCrefResolution;
-    function  LocateSymbol(const AId: string; out AFile: string;
-      out ALine: Integer): Boolean;
-    procedure SetOnStoreChanged(AValue: TGraphVMNotify);
-    procedure SetShowAllTopLevel(AValue: Boolean);
-    function  ShowAllTopLevel: Boolean;
-    procedure SetTopLevelLimit(AValue: Integer);
-    function  TopLevelLimit: Integer;
-    procedure SetTopLevelCapThreshold(AValue: Integer);
-    function  TopLevelCapThreshold: Integer;
-    function  HiddenTopLevelCount: Integer;
+    strict private
+      FData                : TGraphData                  ;
+      FSource              : IGraphSource                ;
+      FCatalog             : IDbCatalog                  ;
+      FActiveStore         : Integer                     ;
+      FSelectedId          : string                      ;
+      FOnChanged           : TGraphVMNotify              ;
+      FOnSelectionChanged  : TGraphVMNotify              ;
+      FCollapsed           : TDictionary<string, Boolean>;
+      FFocusId             : string                      ;
+      FFocusHops           : Integer                     ;
+      FIsolate             : Boolean                     ;
+      FNavStack            : TStack<TNavEntry>           ;
+      FDrillPath           : TList<string>               ; { containment drill roots; empty = project }
+      FOnStoreChanged      : TGraphVMNotify              ;
+      FRestoring           : Boolean                     ;
+      FShowAllTopLevel     : Boolean                     ;
+      FTopLevelLimit       : Integer                     ;
+      FTopLevelCapThreshold: Integer                     ;
+      FHiddenTopLevelCount : Integer                     ;
+      procedure DoChanged;
+      procedure DoSelectionChanged;
+      procedure DoStoreChanged;
+      procedure Reload;
+      function NodeHasChildren (AIndex: Integer): Boolean;
+      function NodeIsCollapsed (AIndex: Integer): Boolean;
+      function NodeIsVisible   (AIndex: Integer): Boolean;
+      function RepresentativeOf(AIndex: Integer): Integer;
+      procedure ComputeNeighborhood(AStart, AHops: Integer; AEdges: TList<TProjEdge>; ASet: TDictionary<Integer, Boolean>);
+      function CaptureState: TNavEntry;
+      procedure RestoreState(const AEntry: TNavEntry);
+      procedure ExpandAncestors(const AId: string);
+    public
+      constructor Create;
+      destructor Destroy; override;
+      procedure SetSource (const ASource : IGraphSource);
+      procedure SetCatalog(const ACatalog: IDbCatalog  );
+      procedure OpenStore(AStoreIndex: Integer);
+      function ActiveStoreIndex: Integer;
+      function Data            : TGraphData;
+      function Projection      : TGraphProjection;
+      procedure SelectNode(const AId: string);
+      function SelectedId: string                  ;
+      function SelectedNodeIndex: Integer;
+      function SelectedDoc      : TGraphDoc;
+      function DocFor(const AId: string): TGraphDoc;
+      procedure SetOnChanged         (AValue: TGraphVMNotify);
+      procedure SetOnSelectionChanged(AValue: TGraphVMNotify);
+      procedure Collapse      (const AId: string);
+      procedure Expand        (const AId: string);
+      procedure ToggleCollapse(const AId: string);
+      procedure CollapseAll;
+      procedure ExpandAll;
+      function IsCollapsed(const AId: string): Boolean;
+      procedure SetFocus(const AId: string; AHops: Integer = 1);
+      procedure ClearFocus;
+      function GetIsolate: Boolean;
+      procedure SetIsolate(AValue: Boolean);
+      procedure NavigateTo(const AId: string);
+      procedure DrillInto (const AId: string);
+      function DrillRootId: string      ;
+      function DrillPath: TArray<string>;
+      procedure DrillToDepth(ADepth: Integer);
+      function ResolveCrossDb(const AName: string): TCrossDbResolution;
+      procedure JumpToCrossDb(const AName: string);
+      procedure Back;
+      function CanGoBack: Boolean                                                             ;
+      function ResolveCref(const AText: string): TCrefResolution                              ;
+      function LocateSymbol(const AId: string; out AFile: string; out ALine: Integer): Boolean;
+      procedure SetOnStoreChanged (AValue: TGraphVMNotify);
+      procedure SetShowAllTopLevel(AValue: Boolean       );
+      function ShowAllTopLevel: Boolean;
+      procedure SetTopLevelLimit(AValue: Integer);
+      function TopLevelLimit: Integer;
+      procedure SetTopLevelCapThreshold(AValue: Integer);
+      function TopLevelCapThreshold: Integer;
+      function HiddenTopLevelCount : Integer;
   end;
 
 implementation
@@ -191,21 +190,21 @@ implementation
 constructor TGraphViewModel.Create;
 begin
   inherited Create;
-  FData := TGraphData.Create;
-  FActiveStore := -1;
-  FSelectedId := '';
-  FCollapsed := TDictionary<string, Boolean>.Create;
-  FFocusId := '';
-  FFocusHops := 1;
-  FIsolate := False;
-  FNavStack := TStack<TNavEntry>.Create;
-  FDrillPath := TList<string>.Create;
-  FRestoring := False;
-  FShowAllTopLevel := False;
-  FTopLevelLimit := 10;
-  FTopLevelCapThreshold := 25;
+  FData:= TGraphData.Create;
+  FActiveStore:= -1;
+  FSelectedId:= '';
+  FCollapsed:= TDictionary<string, Boolean>.Create;
+  FFocusId  := '';
+  FFocusHops:= 1;
+  FIsolate  := False;
+  FNavStack:= TStack<TNavEntry>.Create;
+  FDrillPath:= TList<string>.Create;
+  FRestoring           := False;
+  FShowAllTopLevel     := False;
+  FTopLevelLimit       := 10;
+  FTopLevelCapThreshold:= 25;
   FHiddenTopLevelCount := 0;
-end;
+end; // constructor
 
 destructor TGraphViewModel.Destroy;
 begin
@@ -230,74 +229,71 @@ procedure TGraphViewModel.Reload;
 begin
   if not FRestoring then
   begin
-    FSelectedId := '';
+    FSelectedId:= '';
     FCollapsed.Clear;
-    FFocusId := '';
+    FFocusId:= '';
     FDrillPath.Clear;
   end;
   FData.Clear;
-  if FSource <> nil then
-    FSource.LoadTopology(FData);
+  if FSource <> nil then FSource.LoadTopology(FData);
   DoChanged;
 end;
 
 procedure TGraphViewModel.SetSource(const ASource: IGraphSource);
 begin
-  FSource := ASource;
-  if FSource <> nil then
-    FActiveStore := FSource.StoreIndex
-  else
-    FActiveStore := -1;
+  FSource:= ASource;
+  if FSource <> nil then FActiveStore:= FSource.StoreIndex
+  else FActiveStore:= -1;
   Reload;
 end;
 
 procedure TGraphViewModel.SetCatalog(const ACatalog: IDbCatalog);
 begin
-  FCatalog := ACatalog;
+  FCatalog:= ACatalog;
 end;
 
 procedure TGraphViewModel.OpenStore(AStoreIndex: Integer);
 begin
   if FCatalog = nil then Exit;
-  FActiveStore := AStoreIndex;
-  FSource := FCatalog.SourceForStore(AStoreIndex);
+  FActiveStore:= AStoreIndex;
+  FSource:= FCatalog.SourceForStore(AStoreIndex);
   Reload;
 end;
 
 function TGraphViewModel.ActiveStoreIndex: Integer;
 begin
-  Result := FActiveStore;
+  Result:= FActiveStore;
 end;
 
 function TGraphViewModel.Data: TGraphData;
 begin
-  Result := FData;
+  Result:= FData;
 end;
 
 function TGraphViewModel.NodeHasChildren(AIndex: Integer): Boolean;
 begin
-  Result := Length(FData.ChildrenOf(AIndex)) > 0;
+  Result:= Length(FData.ChildrenOf(AIndex)) > 0;
 end;
 
 function TGraphViewModel.NodeIsCollapsed(AIndex: Integer): Boolean;
 var
   Id: string;
 begin
-  Id := FData.NodeAt(AIndex)^.Id;
-  Result := FCollapsed.ContainsKey(Id) and NodeHasChildren(AIndex);
+  Id:= FData.NodeAt(AIndex)^.Id;
+  Result:= FCollapsed.ContainsKey(Id) and NodeHasChildren(AIndex);
 end;
 
 function TGraphViewModel.NodeIsVisible(AIndex: Integer): Boolean;
 var
   P: Integer;
 begin
-  P := FData.ParentIndexOf(AIndex);
+  P:= FData.ParentIndexOf(AIndex);
   while P >= 0 do
   begin
     if NodeIsCollapsed(P) then Exit(False);
-    P := FData.ParentIndexOf(P);
+    P:= FData.ParentIndexOf(P);
   end;
-  Result := True;
+  Result:= True;
 end;
 
 function TGraphViewModel.RepresentativeOf(AIndex: Integer): Integer;
@@ -306,291 +302,277 @@ var
 begin
   if AIndex < 0 then Exit(-1);
   if NodeIsVisible(AIndex) then Exit(AIndex);
-  Cur := FData.ParentIndexOf(AIndex);
+  Cur:= FData.ParentIndexOf(AIndex);
   while Cur >= 0 do
   begin
     if NodeIsVisible(Cur) then Exit(Cur);
-    Cur := FData.ParentIndexOf(Cur);
+    Cur:= FData.ParentIndexOf(Cur);
   end;
-  Result := -1;
+  Result:= -1;
 end;
 
 function TGraphViewModel.Projection: TGraphProjection;
 var
-  Nodes: TList<TProjNode>;
-  Edges: TList<TProjEdge>;
-  EdgeKey: TDictionary<string, Integer>;
-  I, SI, TI, EI: Integer;
-  PN: TProjNode;
-  PE: TProjEdge;
-  E: TGraphEdge;
-  Key: string;
-  FocusRep: Integer;
-  InHood: TDictionary<Integer, Boolean>;
+  Nodes   : TList<TProjNode>             ;
+  Edges   : TList<TProjEdge>             ;
+  EdgeKey : TDictionary<string, Integer> ;
+  I       : Integer                      ;
+  SI      : Integer                      ;
+  TI      : Integer                      ;
+  EI      : Integer                      ;
+  PN      : TProjNode                    ;
+  PE      : TProjEdge                    ;
+  E       : TGraphEdge                   ;
+  Key     : string                       ;
+  FocusRep: Integer                      ;
+  InHood  : TDictionary<Integer, Boolean>;
   { top-level cap }
-  ProjRootIdx: Integer;
-  TopLevel: TList<Integer>;
-  Removed: TDictionary<Integer, Boolean>;
-  Cur: Integer;
-  CapCount, NIdx: Integer;
-  CapIdxArr: TArray<Integer>;
-  CapDescArr: TArray<Integer>;
-  Tmp: Integer;
-  Swapped: Boolean;
-  DrillIdx, Anc: Integer;
-  InDrill: Boolean;
+  ProjRootIdx: Integer                      ;
+  TopLevel   : TList<Integer>               ;
+  Removed    : TDictionary<Integer, Boolean>;
+  Cur        : Integer                      ;
+  CapCount   : Integer                      ;
+  NIdx       : Integer                      ;
+  CapIdxArr  : TArray<Integer>              ;
+  CapDescArr : TArray<Integer>              ;
+  Tmp        : Integer                      ;
+  Swapped    : Boolean                      ;
+  DrillIdx   : Integer                      ;
+  Anc        : Integer                      ;
+  InDrill    : Boolean                      ;
 begin
   { Containment drill-in: when a drill root is set, show ONLY its subtree. }
-  DrillIdx := -1;
-  if DrillRootId <> '' then
-    DrillIdx := FData.FindNodeIndex(DrillRootId);
+  DrillIdx:= -1;
+  if DrillRootId <> '' then DrillIdx:= FData.FindNodeIndex(DrillRootId);
 
-  Nodes := TList<TProjNode>.Create;
-  Edges := TList<TProjEdge>.Create;
+  Nodes:= TList<TProjNode>.Create;
+  Edges:= TList<TProjEdge>.Create;
   try
-    for I := 0 to FData.NodeCount - 1 do
+    for I:= 0 to FData.NodeCount - 1 do
     begin
       if not NodeIsVisible(I) then Continue;
       if DrillIdx >= 0 then
       begin
         { keep only strict descendants of the drill root }
-        InDrill := False;
-        Anc := FData.ParentIndexOf(I);
+        InDrill:= False;
+        Anc:= FData.ParentIndexOf(I);
         while Anc >= 0 do
         begin
-          if Anc = DrillIdx then begin InDrill := True; Break; end;
-          Anc := FData.ParentIndexOf(Anc);
+          if Anc = DrillIdx then begin InDrill:= True; Break; end;
+          Anc:= FData.ParentIndexOf(Anc);
         end;
         if not InDrill then Continue;
       end;
-      PN.NodeIdx := I;
-      PN.Collapsed := NodeIsCollapsed(I);
-      PN.Dimmed := False;
+      PN.NodeIdx:= I;
+      PN.Collapsed:= NodeIsCollapsed(I);
+      PN.Dimmed:= False;
       Nodes.Add(PN);
-    end;
+    end; // for
     { edges with merge by (src,dst) pair }
-    EdgeKey := TDictionary<string, Integer>.Create;
+    EdgeKey:= TDictionary<string, Integer>.Create;
     try
-      for I := 0 to FData.EdgeCount - 1 do
+      for I:= 0 to FData.EdgeCount - 1 do
       begin
-        E := FData.EdgeAt(I);
+        E:= FData.EdgeAt(I);
         if E.Kind = ekContains then Continue;
-        SI := RepresentativeOf(FData.FindNodeIndex(E.SourceId));
-        TI := RepresentativeOf(FData.FindNodeIndex(E.TargetId));
+        SI:= RepresentativeOf(FData.FindNodeIndex(E.SourceId));
+        TI:= RepresentativeOf(FData.FindNodeIndex(E.TargetId));
         if (SI < 0) or (TI < 0) or (SI = TI) then Continue;
-        Key := IntToStr(SI) + '|' + IntToStr(TI);
+        Key:= IntToStr(SI) + '|' + IntToStr(TI);
         if EdgeKey.TryGetValue(Key, EI) then
         begin
-          PE := Edges[EI];
+          PE:= Edges[EI];
           Inc(PE.Count);
-          PE.Weight := PE.Weight + E.Weight;
-          if PE.Kind <> E.Kind then PE.Kind := ekOther;
-          PE.Aggregated := True;
+          PE.Weight:= PE.Weight + E.Weight;
+          if PE.Kind <> E.Kind then PE.Kind:= ekOther;
+          PE.Aggregated:= True;
           { adopt first non-empty section }
-          if (PE.Section = '') and (E.Label_ <> '') then
-            PE.Section := E.Label_;
-          Edges[EI] := PE;
+          if (PE.Section = '') and (E.Label_ <> '') then PE.Section:= E.Label_;
+          Edges[EI]:= PE;
         end
         else
         begin
-          PE.SourceIdx := SI;
-          PE.TargetIdx := TI;
-          PE.Kind := E.Kind;
-          PE.Count := 1;
-          PE.Weight := E.Weight;
-          PE.Aggregated := False;
-          PE.Dimmed := False;
-          PE.Section := E.Label_;
-          PE.CrossDb := False;
+          PE.SourceIdx:= SI;
+          PE.TargetIdx:= TI;
+          PE.Kind:= E.Kind;
+          PE.Count:= 1;
+          PE.Weight:= E.Weight;
+          PE.Aggregated:= False;
+          PE.Dimmed    := False;
+          PE.Section:= E.Label_;
+          PE.CrossDb:= False;
           EdgeKey.Add(Key, Edges.Count);
           Edges.Add(PE);
         end;
-      end;
+      end; // for
     finally
       EdgeKey.Free;
-    end;
+    end; // try
     { --- top-level cap ---
       Applied BEFORE focus dimming so the cap operates on the
       collapse-resolved visible set.  Removing a top-level unit also removes
       all its currently-visible descendants (they share the same ancestor
       chain) and any edge touching a removed node.
       View preferences FShowAllTopLevel/FTopLevelLimit survive Reload. }
-    if DrillIdx >= 0 then
-    ProjRootIdx := DrillIdx           { drilled in: cap on the drill root's children }
-  else
-    ProjRootIdx := FData.FindNodeIndex('@project');
+    if DrillIdx >= 0 then ProjRootIdx:= DrillIdx { drilled in: cap on the drill root's children }
+    else ProjRootIdx:= FData.FindNodeIndex('@project');
     if ProjRootIdx >= 0 then
     begin
       { collect visible top-level units: direct children of @project }
-      TopLevel := TList<Integer>.Create;
+      TopLevel:= TList<Integer>.Create;
       try
-        for I := 0 to Nodes.Count - 1 do
-          if FData.ParentIndexOf(Nodes[I].NodeIdx) = ProjRootIdx then
-            TopLevel.Add(Nodes[I].NodeIdx);
+        for I:= 0 to Nodes.Count - 1 do
+          if FData.ParentIndexOf(Nodes[I].NodeIdx) = ProjRootIdx then TopLevel.Add(Nodes[I].NodeIdx);
 
         if (not FShowAllTopLevel) and (TopLevel.Count > FTopLevelCapThreshold) then
         begin
           { Sort TopLevel by DescendantCount DESC, tie-break by index ASC
             using a simple bubble sort (counts small in unit tests; this is
             fine for reasonable numbers of units in real use too). }
-          CapCount := TopLevel.Count;
-          SetLength(CapIdxArr, CapCount);
+          CapCount:= TopLevel.Count;
+          SetLength(CapIdxArr , CapCount);
           SetLength(CapDescArr, CapCount);
-          for I := 0 to CapCount - 1 do
+          for I:= 0 to CapCount - 1 do
           begin
-            CapIdxArr[I] := TopLevel[I];
-            CapDescArr[I] := FData.DescendantCount(TopLevel[I]);
+            CapIdxArr[I]:= TopLevel[I];
+            CapDescArr[I]:= FData.DescendantCount(TopLevel[I]);
           end;
           repeat
-            Swapped := False;
-            for I := 0 to CapCount - 2 do
+            Swapped:= False;
+            for I:= 0 to CapCount - 2 do
             begin
               { want DESC by desc-count; tie-break ASC by node index }
-              if (CapDescArr[I] < CapDescArr[I + 1])
-                or ((CapDescArr[I] = CapDescArr[I + 1])
-                    and (CapIdxArr[I] > CapIdxArr[I + 1])) then
+              if (CapDescArr[I] < CapDescArr[I + 1]) or ((CapDescArr[I] = CapDescArr[I + 1]) and (CapIdxArr[I] > CapIdxArr[I + 1])) then
               begin
-                Tmp := CapDescArr[I]; CapDescArr[I] := CapDescArr[I+1]; CapDescArr[I+1] := Tmp;
-                Tmp := CapIdxArr[I];  CapIdxArr[I]  := CapIdxArr[I+1];  CapIdxArr[I+1]  := Tmp;
-                Swapped := True;
+                Tmp:= CapDescArr[I]; CapDescArr[I]:= CapDescArr[I + 1]; CapDescArr[I + 1]:= Tmp;
+                Tmp:= CapIdxArr [I]; CapIdxArr [I]:= CapIdxArr [I + 1]; CapIdxArr [I + 1]:= Tmp;
+                Swapped:= True;
               end;
             end;
           until not Swapped;
 
           { Mark the tail (hidden) top-level units and all their visible
             descendants for removal. }
-          Removed := TDictionary<Integer, Boolean>.Create;
+          Removed:= TDictionary<Integer, Boolean>.Create;
           try
-            for I := FTopLevelLimit to CapCount - 1 do
-              Removed.AddOrSetValue(CapIdxArr[I], True);
+            for I:= FTopLevelLimit to CapCount - 1 do Removed.AddOrSetValue(CapIdxArr[I], True);
 
             { Propagate: any node whose top-level ancestor is removed }
-            for I := 0 to Nodes.Count - 1 do
+            for I:= 0 to Nodes.Count - 1 do
             begin
-              NIdx := Nodes[I].NodeIdx;
+              NIdx:= Nodes[I].NodeIdx;
               if Removed.ContainsKey(NIdx) then Continue;
               { walk up to the top-level ancestor }
-              Cur := NIdx;
+              Cur:= NIdx;
               while FData.ParentIndexOf(Cur) <> ProjRootIdx do
               begin
-                Cur := FData.ParentIndexOf(Cur);
+                Cur:= FData.ParentIndexOf(Cur);
                 if Cur < 0 then Break;
               end;
-              if (Cur >= 0) and Removed.ContainsKey(Cur) then
-                Removed.AddOrSetValue(NIdx, True);
+              if (Cur >= 0) and Removed.ContainsKey(Cur) then Removed.AddOrSetValue(NIdx, True);
             end;
 
             { Remove nodes }
-            for I := Nodes.Count - 1 downto 0 do
-              if Removed.ContainsKey(Nodes[I].NodeIdx) then
-                Nodes.Delete(I);
+            for I:= Nodes.Count - 1 downto 0 do
+              if Removed.ContainsKey(Nodes[I].NodeIdx) then Nodes.Delete(I);
 
             { Remove edges touching removed nodes }
-            for I := Edges.Count - 1 downto 0 do
-              if Removed.ContainsKey(Edges[I].SourceIdx)
-                 or Removed.ContainsKey(Edges[I].TargetIdx) then
-                Edges.Delete(I);
+            for I:= Edges.Count - 1 downto 0 do
+              if Removed.ContainsKey(Edges[I].SourceIdx) or Removed.ContainsKey(Edges[I].TargetIdx) then Edges.Delete(I);
 
-            FHiddenTopLevelCount := CapCount - FTopLevelLimit;
+            FHiddenTopLevelCount:= CapCount - FTopLevelLimit;
           finally
             Removed.Free;
-          end;
-        end
-        else
-          FHiddenTopLevelCount := 0;
+          end; // try
+        end // if
+        else FHiddenTopLevelCount:= 0;
       finally
         TopLevel.Free;
-      end;
-    end
-    else
-      FHiddenTopLevelCount := 0;
+      end; // try
+    end // if
+    else FHiddenTopLevelCount:= 0;
 
     { focus: BFS over the visible projection graph from the focus node's
       representative, marking nodes within FFocusHops as in-neighborhood. }
     if FFocusId <> '' then
     begin
-      FocusRep := RepresentativeOf(FData.FindNodeIndex(FFocusId));
+      FocusRep:= RepresentativeOf(FData.FindNodeIndex(FFocusId));
       if FocusRep >= 0 then
       begin
-        InHood := TDictionary<Integer, Boolean>.Create;
+        InHood:= TDictionary<Integer, Boolean>.Create;
         try
           ComputeNeighborhood(FocusRep, FFocusHops, Edges, InHood);
           { mark node Dimmed when not in neighborhood }
-          for I := 0 to Nodes.Count - 1 do
+          for I:= 0 to Nodes.Count - 1 do
           begin
-            PN := Nodes[I];
-            PN.Dimmed := not InHood.ContainsKey(PN.NodeIdx);
-            Nodes[I] := PN;
+            PN:= Nodes[I];
+            PN.Dimmed:= not InHood.ContainsKey(PN.NodeIdx);
+            Nodes[I]:= PN;
           end;
           { dim edges touching a dimmed node }
-          for I := 0 to Edges.Count - 1 do
+          for I:= 0 to Edges.Count - 1 do
           begin
-            PE := Edges[I];
-            PE.Dimmed := (not InHood.ContainsKey(PE.SourceIdx))
-                      or (not InHood.ContainsKey(PE.TargetIdx));
-            Edges[I] := PE;
+            PE:= Edges[I];
+            PE.Dimmed:= (not InHood.ContainsKey(PE.SourceIdx)) or (not InHood.ContainsKey(PE.TargetIdx));
+            Edges[I]:= PE;
           end;
           if FIsolate then
           begin
-            for I := Nodes.Count - 1 downto 0 do
+            for I:= Nodes.Count - 1 downto 0 do
               if Nodes[I].Dimmed then Nodes.Delete(I);
-            for I := Edges.Count - 1 downto 0 do
+            for I:= Edges.Count - 1 downto 0 do
               if Edges[I].Dimmed then Edges.Delete(I);
           end;
         finally
           InHood.Free;
-        end;
-      end;
-    end;
-    Result.Nodes := Nodes.ToArray;
-    Result.Edges := Edges.ToArray;
+        end; // try
+      end; // if
+    end; // if
+    Result.Nodes:= Nodes.ToArray;
+    Result.Edges:= Edges.ToArray;
   finally
     Nodes.Free;
     Edges.Free;
-  end;
-end;
+  end; // try
+end; // function
 
 procedure TGraphViewModel.SelectNode(const AId: string);
 begin
-  FSelectedId := AId;
+  FSelectedId:= AId;
   DoSelectionChanged;
 end;
 
 function TGraphViewModel.SelectedId: string;
 begin
-  Result := FSelectedId;
+  Result:= FSelectedId;
 end;
 
 function TGraphViewModel.SelectedNodeIndex: Integer;
 begin
-  if FSelectedId = '' then
-    Result := -1
-  else
-    Result := FData.FindNodeIndex(FSelectedId);
+  if FSelectedId = '' then Result:= -1
+  else Result:= FData.FindNodeIndex(FSelectedId);
 end;
 
 function TGraphViewModel.SelectedDoc: TGraphDoc;
 begin
   FillChar(Result, SizeOf(Result), 0);
-  if (FSource <> nil) and (FSelectedId <> '') then
-    Result := FSource.GetDoc(FSelectedId);
+  if (FSource <> nil) and (FSelectedId <> '') then Result:= FSource.GetDoc(FSelectedId);
 end;
 
 function TGraphViewModel.DocFor(const AId: string): TGraphDoc;
 begin
   FillChar(Result, SizeOf(Result), 0);
-  if (FSource <> nil) and (AId <> '') then
-    Result := FSource.GetDoc(AId);
+  if (FSource <> nil) and (AId <> '') then Result:= FSource.GetDoc(AId);
 end;
 
 procedure TGraphViewModel.SetOnChanged(AValue: TGraphVMNotify);
 begin
-  FOnChanged := AValue;
+  FOnChanged:= AValue;
 end;
 
 procedure TGraphViewModel.SetOnSelectionChanged(AValue: TGraphVMNotify);
 begin
-  FOnSelectionChanged := AValue;
+  FOnSelectionChanged:= AValue;
 end;
 
 procedure TGraphViewModel.Collapse(const AId: string);
@@ -607,10 +589,8 @@ end;
 
 procedure TGraphViewModel.ToggleCollapse(const AId: string);
 begin
-  if FCollapsed.ContainsKey(AId) then
-    FCollapsed.Remove(AId)
-  else
-    FCollapsed.AddOrSetValue(AId, True);
+  if FCollapsed.ContainsKey(AId) then FCollapsed.Remove(AId)
+  else FCollapsed.AddOrSetValue(AId, True);
   DoChanged;
 end;
 
@@ -619,9 +599,8 @@ var
   I: Integer;
 begin
   FCollapsed.Clear;
-  for I := 0 to FData.NodeCount - 1 do
-    if NodeHasChildren(I) and (FData.NodeAt(I)^.Kind <> nkProject) then
-      FCollapsed.AddOrSetValue(FData.NodeAt(I)^.Id, True);
+  for I:= 0 to FData.NodeCount - 1 do
+    if NodeHasChildren(I) and (FData.NodeAt(I)^.Kind <> nkProject) then FCollapsed.AddOrSetValue(FData.NodeAt(I)^.Id, True);
   DoChanged;
 end;
 
@@ -633,33 +612,33 @@ end;
 
 function TGraphViewModel.IsCollapsed(const AId: string): Boolean;
 begin
-  Result := FCollapsed.ContainsKey(AId);
+  Result:= FCollapsed.ContainsKey(AId);
 end;
 
 procedure TGraphViewModel.SetFocus(const AId: string; AHops: Integer);
 begin
-  FFocusId := AId;
-  if AHops < 0 then AHops := 0;
-  FFocusHops := AHops;
+  FFocusId:= AId;
+  if AHops < 0 then AHops:= 0;
+  FFocusHops:= AHops;
   DoChanged;
 end;
 
 procedure TGraphViewModel.ClearFocus;
 begin
-  FFocusId := '';
+  FFocusId:= '';
   DoChanged;
 end;
 
 function TGraphViewModel.GetIsolate: Boolean;
 begin
-  Result := FIsolate;
+  Result:= FIsolate;
 end;
 
 procedure TGraphViewModel.SetIsolate(AValue: Boolean);
 begin
   if FIsolate <> AValue then
   begin
-    FIsolate := AValue;
+    FIsolate:= AValue;
     DoChanged;
   end;
 end;
@@ -671,24 +650,23 @@ end;
 
 procedure TGraphViewModel.SetOnStoreChanged(AValue: TGraphVMNotify);
 begin
-  FOnStoreChanged := AValue;
+  FOnStoreChanged:= AValue;
 end;
 
 function TGraphViewModel.CaptureState: TNavEntry;
 var
-  Key: string;
-  L: TList<string>;
+  Key: string       ;
+  L  : TList<string>;
 begin
-  Result.StoreIndex := FActiveStore;
-  Result.SelectedId := FSelectedId;
-  Result.FocusId := FFocusId;
+  Result.StoreIndex:= FActiveStore;
+  Result.SelectedId:= FSelectedId;
+  Result.FocusId   := FFocusId;
   Result.FocusHops := FFocusHops;
-  Result.Isolate := FIsolate;
-  L := TList<string>.Create;
+  Result.Isolate   := FIsolate;
+  L:= TList<string>.Create;
   try
-    for Key in FCollapsed.Keys do
-      L.Add(Key);
-    Result.Collapsed := L.ToArray;
+    for Key in FCollapsed.Keys do L.Add(Key);
+    Result.Collapsed:= L.ToArray;
   finally
     L.Free;
   end;
@@ -700,35 +678,35 @@ var
 begin
   if AEntry.StoreIndex <> FActiveStore then
   begin
-    FRestoring := True;
+    FRestoring:= True;
     try
       OpenStore(AEntry.StoreIndex);
     finally
-      FRestoring := False;
+      FRestoring:= False;
     end;
   end;
   FCollapsed.Clear;
-  for Key in AEntry.Collapsed do
-    FCollapsed.AddOrSetValue(Key, True);
-  FFocusId := AEntry.FocusId;
+  for Key in AEntry.Collapsed do FCollapsed.AddOrSetValue(Key, True);
+  FFocusId   := AEntry.FocusId;
   FFocusHops := AEntry.FocusHops;
-  FIsolate := AEntry.Isolate;
-  FSelectedId := AEntry.SelectedId;
+  FIsolate   := AEntry.Isolate;
+  FSelectedId:= AEntry.SelectedId;
   DoChanged;
   DoSelectionChanged;
-end;
+end; // procedure
 
 procedure TGraphViewModel.ExpandAncestors(const AId: string);
 var
-  Idx, P: Integer;
+  Idx: Integer;
+  P  : Integer;
 begin
-  Idx := FData.FindNodeIndex(AId);
+  Idx:= FData.FindNodeIndex(AId);
   if Idx < 0 then Exit;
-  P := FData.ParentIndexOf(Idx);
+  P:= FData.ParentIndexOf(Idx);
   while P >= 0 do
   begin
     FCollapsed.Remove(FData.NodeAt(P)^.Id);
-    P := FData.ParentIndexOf(P);
+    P:= FData.ParentIndexOf(P);
   end;
 end;
 
@@ -737,7 +715,7 @@ begin
   FNavStack.Push(CaptureState);
   ExpandAncestors(AId);
   FCollapsed.Remove(AId);
-  FSelectedId := AId;
+  FSelectedId:= AId;
   DoChanged;
   DoSelectionChanged;
 end;
@@ -746,169 +724,163 @@ procedure TGraphViewModel.DrillInto(const AId: string);
 begin
   if AId = '' then Exit;
   if (FDrillPath.Count > 0) and (FDrillPath.Last = AId) then Exit;
-  FDrillPath.Add(AId);
-  FCollapsed.Remove(AId);     { expand the new root so its members are visible }
-  FSelectedId := AId;
+  FDrillPath.Add   (AId);
+  FCollapsed.Remove(AId); { expand the new root so its members are visible }
+  FSelectedId:= AId;
   DoChanged;
   DoSelectionChanged;
 end;
 
 function TGraphViewModel.DrillRootId: string;
 begin
-  if FDrillPath.Count > 0 then
-    Result := FDrillPath.Last
-  else
-    Result := '';
+  if FDrillPath.Count > 0 then Result:= FDrillPath.Last
+  else Result:= '';
 end;
 
 function TGraphViewModel.DrillPath: TArray<string>;
 begin
-  Result := FDrillPath.ToArray;
+  Result:= FDrillPath.ToArray;
 end;
 
 procedure TGraphViewModel.DrillToDepth(ADepth: Integer);
 begin
-  if ADepth < 0 then ADepth := 0;
+  if ADepth < 0 then ADepth:= 0;
   if ADepth > FDrillPath.Count then Exit;
-  while FDrillPath.Count > ADepth do
-    FDrillPath.Delete(FDrillPath.Count - 1);
+  while FDrillPath.Count > ADepth do FDrillPath.Delete(FDrillPath.Count - 1);
   DoChanged;
   DoSelectionChanged;
 end;
 
 function TGraphViewModel.ResolveCrossDb(const AName: string): TCrossDbResolution;
 begin
-  if FCatalog <> nil then
-    Result := FCatalog.ResolveAcrossStores(AName)
-  else
-    FillChar(Result, SizeOf(Result), 0);
+  if FCatalog <> nil then Result:= FCatalog.ResolveAcrossStores(AName)
+  else FillChar(Result, SizeOf(Result), 0);
 end;
 
 procedure TGraphViewModel.JumpToCrossDb(const AName: string);
 var
   Res: TCrossDbResolution;
 begin
-  Res := ResolveCrossDb(AName);
+  Res:= ResolveCrossDb(AName);
   if not Res.Found then Exit;
   FNavStack.Push(CaptureState);
   if Res.StoreIndex <> FActiveStore then
   begin
-    FRestoring := True;
+    FRestoring:= True;
     try
       OpenStore(Res.StoreIndex);
     finally
-      FRestoring := False;
+      FRestoring:= False;
     end;
     DoStoreChanged;
   end;
-  FSelectedId := Res.TargetId;
+  FSelectedId:= Res.TargetId;
   DoChanged;
   DoSelectionChanged;
-end;
+end; // procedure
 
 procedure TGraphViewModel.Back;
 var
   Entry: TNavEntry;
 begin
   if FNavStack.Count = 0 then Exit;
-  Entry := FNavStack.Pop;
+  Entry:= FNavStack.Pop;
   RestoreState(Entry);
 end;
 
 function TGraphViewModel.CanGoBack: Boolean;
 begin
-  Result := FNavStack.Count > 0;
+  Result:= FNavStack.Count > 0;
 end;
 
 function TGraphViewModel.ResolveCref(const AText: string): TCrefResolution;
 begin
-  if FSource <> nil then
-    Result := FSource.ResolveCref(AText)
+  if FSource <> nil then Result:= FSource.ResolveCref(AText)
   else
   begin
     FillChar(Result, SizeOf(Result), 0);
-    Result.Text := AText;
-    Result.Kind := crkUnresolved;
+    Result.Text:= AText;
+    Result.Kind:= crkUnresolved;
   end;
 end;
 
-function TGraphViewModel.LocateSymbol(const AId: string; out AFile: string;
-  out ALine: Integer): Boolean;
+function TGraphViewModel.LocateSymbol(const AId: string; out AFile: string; out ALine: Integer): Boolean;
 begin
-  AFile := ''; ALine := 0;
-  if FSource <> nil then
-    Result := FSource.LocateSymbol(AId, AFile, ALine)
-  else
-    Result := False;
+  AFile:= ''; ALine:= 0;
+  if FSource <> nil then Result:= FSource.LocateSymbol(AId, AFile, ALine)
+  else Result:= False;
 end;
 
 procedure TGraphViewModel.SetShowAllTopLevel(AValue: Boolean);
 begin
   if FShowAllTopLevel <> AValue then
   begin
-    FShowAllTopLevel := AValue;
+    FShowAllTopLevel:= AValue;
     DoChanged;
   end;
 end;
 
 function TGraphViewModel.ShowAllTopLevel: Boolean;
 begin
-  Result := FShowAllTopLevel;
+  Result:= FShowAllTopLevel;
 end;
 
 procedure TGraphViewModel.SetTopLevelLimit(AValue: Integer);
 begin
-  if AValue < 1 then AValue := 1;
+  if AValue < 1 then AValue:= 1;
   if FTopLevelLimit <> AValue then
   begin
-    FTopLevelLimit := AValue;
+    FTopLevelLimit:= AValue;
     DoChanged;
   end;
 end;
 
 function TGraphViewModel.TopLevelLimit: Integer;
 begin
-  Result := FTopLevelLimit;
+  Result:= FTopLevelLimit;
 end;
 
 procedure TGraphViewModel.SetTopLevelCapThreshold(AValue: Integer);
 begin
-  if AValue < 1 then AValue := 1;
+  if AValue < 1 then AValue:= 1;
   if FTopLevelCapThreshold <> AValue then
   begin
-    FTopLevelCapThreshold := AValue;
+    FTopLevelCapThreshold:= AValue;
     DoChanged;
   end;
 end;
 
 function TGraphViewModel.TopLevelCapThreshold: Integer;
 begin
-  Result := FTopLevelCapThreshold;
+  Result:= FTopLevelCapThreshold;
 end;
 
 function TGraphViewModel.HiddenTopLevelCount: Integer;
 begin
-  Result := FHiddenTopLevelCount;
+  Result:= FHiddenTopLevelCount;
 end;
 
-procedure TGraphViewModel.ComputeNeighborhood(AStart, AHops: Integer;
-  AEdges: TList<TProjEdge>; ASet: TDictionary<Integer, Boolean>);
+procedure TGraphViewModel.ComputeNeighborhood(AStart, AHops: Integer; AEdges: TList<TProjEdge>; ASet: TDictionary<Integer, Boolean>);
 var
-  Frontier, Next: TList<Integer>;
-  Hop, I, J, N: Integer;
+  Frontier: TList<Integer>;
+  Next    : TList<Integer>;
+  Hop     : Integer       ;
+  I       : Integer       ;
+  J       : Integer       ;
+  N       : Integer       ;
 begin
   ASet.AddOrSetValue(AStart, True);
-  Frontier := TList<Integer>.Create;
-  Next := TList<Integer>.Create;
+  Frontier:= TList<Integer>.Create;
+  Next    := TList<Integer>.Create;
   try
     Frontier.Add(AStart);
-    for Hop := 1 to AHops do
+    for Hop:= 1 to AHops do
     begin
       Next.Clear;
-      for I := 0 to Frontier.Count - 1 do
+      for I:= 0 to Frontier.Count - 1 do
       begin
-        N := Frontier[I];
-        for J := 0 to AEdges.Count - 1 do
+        N:= Frontier[I];
+        for J:= 0 to AEdges.Count - 1 do
         begin
           if AEdges[J].SourceIdx = N then
             if not ASet.ContainsKey(AEdges[J].TargetIdx) then
@@ -923,14 +895,14 @@ begin
               Next.Add(AEdges[J].SourceIdx);
             end;
         end;
-      end;
+      end; // for
       Frontier.Clear;
       Frontier.AddRange(Next);
-    end;
+    end; // for
   finally
     Frontier.Free;
     Next.Free;
-  end;
-end;
+  end; // try
+end; // procedure
 
 end.
