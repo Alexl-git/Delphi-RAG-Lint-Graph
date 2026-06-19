@@ -275,8 +275,34 @@ begin
   end;
 end;
 
+procedure Test_Flow_DbSource_MethodImplRange;
+var
+  DbPath : string;
+  Cat    : IDbCatalog;
+  FlowSrc: IFlowSource;
+  Callees: TArray<TFlowCallee>;
+begin
+  { Regression: a METHOD's calls live in its IMPLEMENTATION body, not its in-class
+    declaration line (which is often a single line). GetCallees must search
+    impl_start_line..impl_end_line on a schema-v9 index, else every method reports
+    "(no outgoing calls)". Verified against the real self-index; skipped on a
+    machine that does not have it built (mirrors the perf tests). }
+  DbPath := 'C:\Projects\.drag-lint\Delphi-RAG-lint.sqlite';
+  if not FileExists(DbPath) then Exit;   { no self-index here -> skip, not fail }
+
+  Cat := TDbCatalog.Create([DbPath]);
+  FlowSrc := TDbFlowSource.Create(Cat);
+  Callees := FlowSrc.GetCallees('DRagLint.Diagnostics.CompileCheck.TCompileChecker.Run');
+  Check(Length(Callees) > 0,
+    'TCompileChecker.Run resolves body callees via the impl range ' +
+    '(was 0 -- the declaration-only-range bug)');
+  Cat := nil;
+  FlowSrc := nil;
+end;
+
 initialization
   RegisterTest('Flow_OrderAndDedup',      Test_Flow_OrderAndDedup);
+  RegisterTest('Flow_DbSource_MethodImplRange', Test_Flow_DbSource_MethodImplRange);
   RegisterTest('Flow_Recursion',          Test_Flow_Recursion);
   RegisterTest('Flow_DepthCap',           Test_Flow_DepthCap);
   RegisterTest('Flow_BreadthCap',         Test_Flow_BreadthCap);

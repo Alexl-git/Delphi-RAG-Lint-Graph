@@ -926,16 +926,35 @@ var
   Q   : TFDQuery       ;
   List: TList<TCallRef>;
   R   : TCallRef       ;
+  SrcLo, SrcHi, InsLo, InsHi: string;
 begin
   List:= TList<TCallRef>.Create;
   try
     Q:= TFDQuery.Create(nil);
     try
       Q.Connection:= FConn;
+      { v0.49: attribute calls to the implementation BODY, not the declaration.
+        For a method, start_line/end_line is the in-class DECLARATION (often a
+        single line) -- the calls live in impl_start_line..impl_end_line. Use the
+        impl range when present (schema v9+); fall back to start/end otherwise
+        (older indexes, or symbols with no separate body). Without this every
+        method reports "(no outgoing calls)". }
+      if FSchemaVer >= 9 then
+      begin
+        SrcLo:= '(CASE WHEN COALESCE(src.impl_start_line,0) > 0 THEN src.impl_start_line ELSE src.start_line END)';
+        SrcHi:= '(CASE WHEN COALESCE(src.impl_end_line,0)   > 0 THEN src.impl_end_line   ELSE src.end_line   END)';
+        InsLo:= '(CASE WHEN COALESCE(ins.impl_start_line,0) > 0 THEN ins.impl_start_line ELSE ins.start_line END)';
+        InsHi:= '(CASE WHEN COALESCE(ins.impl_end_line,0)   > 0 THEN ins.impl_end_line   ELSE ins.end_line   END)';
+      end
+      else
+      begin
+        SrcLo:= 'src.start_line'; SrcHi:= 'src.end_line';
+        InsLo:= 'ins.start_line'; InsHi:= 'ins.end_line';
+      end;
       Q.SQL.Text:= 'SELECT r.start_line AS cl, r.name_text AS nm, t.qualified_name AS tq ' + 'FROM refs r ' + 'JOIN symbols src ON src.qualified_name = :q ' +
-      'LEFT JOIN symbols t ON t.id = r.symbol_id ' + 'WHERE r.kind = ''call'' ' + '  AND r.file_id = src.file_id ' + '  AND r.start_line BETWEEN src.start_line AND src.end_line ' +
-      '  AND NOT EXISTS (' + '    SELECT 1 FROM symbols ins ' + '    WHERE ins.file_id = src.file_id ' + '      AND ins.start_line > src.start_line ' +
-      '      AND ins.start_line <= r.start_line ' + '      AND ins.end_line   >= r.start_line) ' + 'ORDER BY r.start_line';
+      'LEFT JOIN symbols t ON t.id = r.symbol_id ' + 'WHERE r.kind = ''call'' ' + '  AND r.file_id = src.file_id ' + '  AND r.start_line BETWEEN ' + SrcLo + ' AND ' + SrcHi + ' ' +
+      '  AND NOT EXISTS (' + '    SELECT 1 FROM symbols ins ' + '    WHERE ins.file_id = src.file_id ' + '      AND ' + InsLo + ' > ' + SrcLo + ' ' +
+      '      AND ' + InsLo + ' <= r.start_line ' + '      AND ' + InsHi + ' >= r.start_line) ' + 'ORDER BY r.start_line';
       Q.ParamByName('q').AsString:= AQName;
       Q.Open;
       while not Q.Eof do
