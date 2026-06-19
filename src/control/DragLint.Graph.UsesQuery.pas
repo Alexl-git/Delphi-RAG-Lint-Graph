@@ -27,11 +27,23 @@ type
     External: Boolean; { True if target_file_id is NULL (not in this store) }
   end;
 
+  TCallerRow = record
+    QualifiedName: string;  { the calling routine's qualified name }
+    KindText     : string;  { its kind (method/function/procedure...) }
+  end;
+
   { For the unit whose qualified name is AUnitName, returns its interface-uses,
   implementation-uses, and the units that use it (dependents).  Returns False
   (and empty arrays) if the DB can't be opened or the unit isn't found.
   Never raises. }
 function QueryUnitUses(const ADbPath, AUnitName: string; out AIntfUses, AImplUses: TArray<TUnitUseRow>; out AUsedBy: TArray<string>): Boolean;
+
+  { Name-based find-callers for a symbol (what the CLI does): the routines that
+  CALL ATargetQName, attributed to the enclosing routine of each call-ref whose
+  name_text matches the target's leaf name. Works regardless of call-target
+  resolution (the loaded graph's call edges only cover RESOLVED calls, so they
+  miss most callers). Returns distinct callers. Never raises. }
+function QuerySymbolCallers(const ADbPath, ATargetQName: string; out ACallers: TArray<TCallerRow>): Boolean;
 
 implementation
 
@@ -43,6 +55,85 @@ uses
   , FireDAC.Stan.Param
   , FireDAC.DApt
   ;
+
+function OpenImmutable(const ADbPath: string): TFDConnection; forward;
+
+function QuerySymbolCallers(const ADbPath, ATargetQName: string; out ACallers: TArray<TCallerRow>): Boolean;
+var
+  Conn: TFDConnection;
+  Q   : TFDQuery     ;
+  Leaf: string       ;
+  Ver : Integer      ;
+  EncLo, EncHi, InsLo, InsHi: string;
+  L   : TList<TCallerRow>;
+  Row : TCallerRow   ;
+  P   : Integer      ;
+begin
+  Result:= False;
+  SetLength(ACallers, 0);
+  P:= LastDelimiter('.', ATargetQName);
+  if P > 0 then Leaf:= Copy(ATargetQName, P + 1, MaxInt) else Leaf:= ATargetQName;
+  if Leaf = '' then Exit;
+
+  Conn:= nil; Q:= nil;
+  L:= TList<TCallerRow>.Create;
+  try
+    try
+      Conn:= OpenImmutable(ADbPath);
+      Q:= TFDQuery.Create(nil);
+      Q.Connection:= Conn;
+
+      { impl-range body attribution when the index carries it (schema v9+) }
+      Ver:= 0;
+      Q.SQL.Text:= 'SELECT value FROM schema_meta WHERE key = ''schema_version'' LIMIT 1';
+      Q.Open;
+      if not Q.IsEmpty then Ver:= StrToIntDef(Q.Fields[0].AsString, 0);
+      Q.Close;
+      if Ver >= 9 then
+      begin
+        EncLo:= '(CASE WHEN COALESCE(encl.impl_start_line,0)>0 THEN encl.impl_start_line ELSE encl.start_line END)';
+        EncHi:= '(CASE WHEN COALESCE(encl.impl_end_line,0)>0 THEN encl.impl_end_line ELSE encl.end_line END)';
+        InsLo:= '(CASE WHEN COALESCE(ins.impl_start_line,0)>0 THEN ins.impl_start_line ELSE ins.start_line END)';
+        InsHi:= '(CASE WHEN COALESCE(ins.impl_end_line,0)>0 THEN ins.impl_end_line ELSE ins.end_line END)';
+      end
+      else
+      begin
+        EncLo:= 'encl.start_line'; EncHi:= 'encl.end_line';
+        InsLo:= 'ins.start_line';  InsHi:= 'ins.end_line';
+      end;
+
+      Q.SQL.Text:=
+        'SELECT DISTINCT encl.qualified_name AS caller, encl.kind AS ckind ' +
+        'FROM refs r JOIN symbols encl ON encl.file_id = r.file_id ' +
+        '  AND r.start_line BETWEEN ' + EncLo + ' AND ' + EncHi + ' ' +
+        '  AND NOT EXISTS (SELECT 1 FROM symbols ins WHERE ins.file_id = r.file_id ' +
+        '    AND ' + InsLo + ' > ' + EncLo + ' AND ' + InsLo + ' <= r.start_line AND ' + InsHi + ' >= r.start_line) ' +
+        'WHERE r.kind = ''call'' AND r.name_text = :leaf ' +
+        'ORDER BY encl.qualified_name';
+      Q.ParamByName('leaf').AsString:= Leaf;
+      Q.Open;
+      while not Q.Eof do
+      begin
+        Row.QualifiedName:= Q.FieldByName('caller').AsString;
+        Row.KindText     := Q.FieldByName('ckind').AsString;
+        L.Add(Row);
+        Q.Next;
+      end;
+      ACallers:= L.ToArray;
+      Result:= True;
+    except
+      Result:= False;
+    end;
+  finally
+    Q.Free;
+    if Conn <> nil then
+    begin
+      if Conn.Connected then Conn.Close;
+      Conn.Free;
+    end;
+    L.Free;
+  end;
+end;
 
 function OpenImmutable(const ADbPath: string): TFDConnection;
 begin

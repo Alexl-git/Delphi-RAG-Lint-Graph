@@ -154,6 +154,10 @@ type { Structure-tree node descriptor (attached to each TTreeNode.Data).  The tr
       procedure GraphNodeClick(Sender: TObject; const A: TGraphNodeEventArgs);
       procedure GraphSelectionChanged(Sender: TObject);
       procedure GraphTraceFlow(Sender: TObject; const AId: string);
+      procedure GraphWhereUsed(Sender: TObject; const AId: string);
+      { v0.49: fill the structure panel with the precise, clickable list of callers
+        of ASymbolId (from resolved call edges) + center the graph on it. }
+      procedure ShowUsedBy(const ASymbolId: string);
       procedure EnterFlowBtnClick(Sender: TObject);
       procedure GraphOpenSource(Sender: TObject; ANode: PGraphNode);
       procedure GraphCrossDbJump(Sender: TObject; const AName: string);
@@ -467,6 +471,7 @@ begin
   FGraph.OnOpenSource     := GraphOpenSource;
   FGraph.OnCrossDbJump    := GraphCrossDbJump;
   FGraph.OnTraceFlow      := GraphTraceFlow;
+  FGraph.OnWhereUsed      := GraphWhereUsed;
   FGraph.OnViewChanged    := GraphViewChanged;
   FGraph.OnZoomChanged    := GraphZoomChanged;
 
@@ -770,28 +775,32 @@ begin
   { Standalone only -- yanking foreground while embedded would steal focus
     from the IDE. }
   if FParentHwnd = 0 then SetForegroundWindow(Handle);
-  { v0.49: automation/self-test entry. --flow <qname> jumps straight into the
-    flow view for a symbol (handy for screenshots); --selftest <file> then writes
-    a one-line flow self-diagnostic and exits. Deferred one turn so layout/paint
-    settle. }
-  if GetParamValue('--flow') <> '' then
+  { v0.49: automation/self-test entry. --flow <qname> jumps into the flow view;
+    --whereused <qname> fills the caller list. --selftest <file> then writes a
+    one-line diagnostic and exits. Deferred one turn so layout/paint settle. }
+  if (GetParamValue('--flow') <> '') or (GetParamValue('--whereused') <> '') then
     PostMessage(Handle, WM_SELFTEST, 0, 0);
 end;
 
 procedure TfrmMain.WMSelfTest(var Msg: TMessage);
 var
-  FlowSym, LogPath: string;
+  FlowSym, UsedBySym, LogPath, Diag: string;
 begin
-  FlowSym:= GetParamValue('--flow');
+  FlowSym  := GetParamValue('--flow');
+  UsedBySym:= GetParamValue('--whereused');
   if FlowSym <> '' then StartFlowFrom(FlowSym);
+  if UsedBySym <> '' then ShowUsedBy(UsedBySym);
 
   LogPath:= GetParamValue('--selftest');
   if LogPath <> '' then
   begin
+    if FlowSym <> '' then
+      Diag:= 'symbol=' + FlowSym + #13#10 + FFlowControl.DiagDump
+    else
+      Diag:= 'symbol=' + UsedBySym + #13#10 +
+             Format('usedby callers=%d', [FTree.Items.Count]);
     try
-      TFile.WriteAllText(LogPath,
-        'symbol=' + FlowSym + #13#10 +
-        FFlowControl.DiagDump + #13#10, TEncoding.ASCII);
+      TFile.WriteAllText(LogPath, Diag + #13#10, TEncoding.ASCII);
     except
       { never let diagnostics crash the viewer }
     end;
@@ -1389,7 +1398,7 @@ end;
 
 procedure TfrmMain.TreeCtxWhereUsed(Sender: TObject);
 begin
-  if FGraph <> nil then FGraph.WhereUsedFor(FTreeCtxId);
+  ShowUsedBy(FTreeCtxId);   { precise caller list in the panel }
 end;
 
 procedure TfrmMain.TreeCtxCenter(Sender: TObject);
@@ -1407,6 +1416,63 @@ end;
 procedure TfrmMain.GraphTraceFlow(Sender: TObject; const AId: string);
 begin
   if AId <> '' then StartFlowFrom(AId);
+end;
+
+procedure TfrmMain.GraphWhereUsed(Sender: TObject; const AId: string);
+begin
+  ShowUsedBy(AId);
+end;
+
+procedure TfrmMain.ShowUsedBy(const ASymbolId: string);
+var
+  Callers: TArray<TCallerRow>;
+  Row    : TCallerRow        ;
+  Cap    : string            ;
+  Leaf   : string            ;
+  Scope  : string            ;
+  P      : Integer           ;
+  TN     : TTreeNode         ;
+  DbPath : string            ;
+begin
+  if (FVM = nil) or (ASymbolId = '') or (Length(FDbPaths) = 0) then Exit;
+
+  { Query the active store's DB by NAME (the loaded graph's call edges only cover
+    RESOLVED calls, so they miss most callers). }
+  if (FVM.ActiveStoreIndex >= 0) and (FVM.ActiveStoreIndex < Length(FDbPaths)) then
+    DbPath:= FDbPaths[FVM.ActiveStoreIndex]
+  else
+    DbPath:= FDbPaths[0];
+  if not QuerySymbolCallers(DbPath, ASymbolId, Callers) then SetLength(Callers, 0);
+
+  ClearStructure;
+  FTree.Items.BeginUpdate;
+  try
+    for Row in Callers do
+    begin
+      P:= LastDelimiter('.', Row.QualifiedName);
+      if P > 0 then
+      begin
+        Leaf := Copy(Row.QualifiedName, P + 1, MaxInt);
+        Scope:= Copy(Row.QualifiedName, 1, P - 1);
+      end
+      else begin Leaf:= Row.QualifiedName; Scope:= ''; end;
+      Cap:= Leaf + '   : ' + Row.KindText;
+      if Scope <> '' then Cap:= Cap + '   (' + Scope + ')';
+      TN:= FTree.Items.AddChild(nil, Cap);
+      TN.Data:= NewTag(skSymbol, Row.QualifiedName, '', 0);   { click -> jump to caller }
+    end;
+  finally
+    FTree.Items.EndUpdate;
+  end;
+
+  P:= LastDelimiter('.', ASymbolId);
+  if P > 0 then Leaf:= Copy(ASymbolId, P + 1, MaxInt) else Leaf:= ASymbolId;
+  FStructHdr.Caption:= Format('  Used by %s: %d caller(s)', [Leaf, Length(Callers)]);
+  if FStatus <> nil then
+    FStatus.SimpleText:= Format('%d caller(s) of %s  (click a row to jump)', [Length(Callers), ASymbolId]);
+
+  { Keep the graph readable: just center on the symbol -- no all-units hairball. }
+  if FGraph <> nil then FGraph.CenterOnNode(ASymbolId);
 end;
 
 procedure TfrmMain.EnterFlowBtnClick(Sender: TObject);

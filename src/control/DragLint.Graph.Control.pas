@@ -203,6 +203,7 @@ type
       FOnOpenSource     : TGraphOpenSourceEvent;
       FOnCrossDbJump    : TGraphNameEvent      ;
       FOnTraceFlow      : TGraphIdEvent        ;
+      FOnWhereUsed      : TGraphIdEvent        ;
       FOnViewChanged    : TNotifyEvent         ;
       FOnZoomChanged    : TNotifyEvent         ;
 
@@ -340,6 +341,9 @@ type
       { Fired by the "Trace flow from here" context item with the right-clicked
       node's id, so the host can enter Code-Flow view rooted at that symbol. }
       property OnTraceFlow: TGraphIdEvent read FOnTraceFlow write FOnTraceFlow;
+      { v0.49: host shows a precise caller list (panel) instead of an all-units
+        graph hairball. If unassigned, falls back to a dim-only focus. }
+      property OnWhereUsed: TGraphIdEvent read FOnWhereUsed write FOnWhereUsed;
       { Fired after VM state changes (collapse/focus/select/nav/store/show-all).
       Host can use this to refresh UI elements that read VM counts. }
       property OnViewChanged: TNotifyEvent read FOnViewChanged write FOnViewChanged;
@@ -1139,16 +1143,20 @@ var
 begin
   if (FVM = nil) or (FContextNodeIdx < 0) then Exit;
   Id:= FVM.Data.NodeAt(FContextNodeIdx).Id;
-  { Callers live in OTHER units. If we are drilled into one unit the neighborhood
-    is scoped out and focus highlights nothing -- so leave the drill and reveal
-    all top-level units, then reveal + focus the target's 1-hop neighborhood. }
-  if FVM.DrillRootId <> '' then FVM.DrillToDepth(0);
-  if not FVM.ShowAllTopLevel then FVM.SetShowAllTopLevel(True);
-  FVM.NavigateTo(Id);    { reveal + select the target }
-  FVM.SetFocus(Id, 1);   { dim to the 1-hop neighborhood }
+  if Assigned(FOnWhereUsed) then
+  begin
+    { Host (viewer) builds a precise, clickable caller list in the panel and
+      centers on the symbol -- readable, unlike dumping every unit into the graph. }
+    FOnWhereUsed(Self, Id);
+    Exit;
+  end;
+  { Fallback (no host): dim to the 1-hop neighborhood. No all-units reveal -- that
+    produced an unreadable hairball. }
+  FVM.NavigateTo(Id);
+  FVM.SetFocus(Id, 1);
   FFocusActive:= True;
   FProjValid  := False;
-  Relayout;              { re-fit so the highlighted neighborhood frames }
+  Invalidate;
   if Assigned(FOnViewChanged) then FOnViewChanged(Self);
 end;
 
