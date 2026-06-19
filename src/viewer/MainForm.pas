@@ -443,10 +443,11 @@ begin
   FSplitter.Align  := alLeft; { sits at the panel's right edge }
   FSplitter.Width  := 8;      { wider grab strip -- easy to grab }
   FSplitter.Beveled:= True;   { visible grab strip }
-  FSplitter.Color:= TColor($00909090);   { brighter so the slider is obvious }
+  FSplitter.Color:= TColor($00967864);   { steel-blue accent -- clearly a control }
   FSplitter.ParentColor:= False;
   FSplitter.MinSize    := 160;
   FSplitter.ResizeStyle:= rsUpdate; { live drag }
+  FSplitter.Cursor     := crHSplit; { mouse shows the resize (slider) cursor }
   FSplitter.Hint       := 'Drag to resize the search panel';
   FSplitter.ShowHint   := True;
 
