@@ -367,8 +367,143 @@ begin
   CheckEqualsInt(10, VM.HiddenTopLevelCount, 'Threshold=10: 10 units hidden');
 end;
 
+procedure Test_VMNavigateEscapesDrill;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  I, TgtIdx: Integer;
+  FoundTarget: Boolean;
+begin
+  { Drilling into uA scopes the projection to uA's subtree. Searching (or
+    editor-sync) then navigating to a node in uB must ESCAPE the drill scope so
+    the target is actually revealed. Regression: NavigateTo expanded ancestors
+    but left FDrillPath set, so the target stayed hidden and CenterOnNode found
+    nothing to center -- the "search box doesn't show TCompileChecker" symptom. }
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.DrillInto('uA');
+  CheckEqualsStr('uA', VM.DrillRootId, 'drilled into uA');
+
+  TgtIdx := VM.Data.FindNodeIndex('uB.TB');
+  Proj := VM.Projection;
+  FoundTarget := False;
+  for I := 0 to High(Proj.Nodes) do
+    if Proj.Nodes[I].NodeIdx = TgtIdx then FoundTarget := True;
+  Check(not FoundTarget, 'uB.TB is hidden while drilled into uA');
+
+  VM.NavigateTo('uB.TB');   { node in the OTHER unit }
+  CheckEqualsStr('', VM.DrillRootId,
+    'NavigateTo outside the drill scope pops the drill back to project');
+
+  Proj := VM.Projection;
+  FoundTarget := False;
+  for I := 0 to High(Proj.Nodes) do
+    if Proj.Nodes[I].NodeIdx = TgtIdx then FoundTarget := True;
+  Check(FoundTarget, 'uB.TB is revealed in the projection after NavigateTo');
+  CheckEqualsStr('uB.TB', VM.SelectedId, 'target selected after navigate');
+end;
+
+procedure Test_VMDrillBackForward;
+var
+  VM: IGraphViewModel;
+begin
+  { Drill-in is recorded in history; Back undoes the drill, Forward redoes it.
+    (Previously DrillInto did not push history, so Back/mouse could not leave a
+    drilled-in view.) }
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  CheckEqualsStr('', VM.DrillRootId, 'no drill initially');
+  Check(not VM.CanGoBack, 'no back history initially');
+  Check(not VM.CanGoForward, 'no forward history initially');
+
+  VM.DrillInto('uA');
+  CheckEqualsStr('uA', VM.DrillRootId, 'drilled into uA');
+  Check(VM.CanGoBack, 'drill-in recorded -> can go back');
+
+  VM.Back;
+  CheckEqualsStr('', VM.DrillRootId, 'Back undoes the drill (scope back to project)');
+  Check(VM.CanGoForward, 'Forward available after Back');
+
+  VM.Forward;
+  CheckEqualsStr('uA', VM.DrillRootId, 'Forward redoes the drill');
+  Check(not VM.CanGoForward, 'no forward left at the tip');
+
+  { A new navigation after Back must drop the forward (redo) tail. }
+  VM.Back;
+  Check(VM.CanGoForward, 'forward available again after Back');
+  VM.NavigateTo('uB.TB');
+  Check(not VM.CanGoForward, 'new navigation branches -> forward dropped');
+end;
+
+procedure Test_VMGoToSymbolDrillsIntoUnit;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  I, TgtIdx: Integer;
+  Found: Boolean;
+begin
+  { Searching a class "jumps into" its unit: the drill scope becomes the unit so
+    the class renders as a UML box (and the top-level unit cap is bypassed),
+    centered on the target. (Regression: search only revealed in place, so a
+    capped/hidden unit's class never appeared.) }
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.GoToSymbol('uB.TB');   { a class living in unit uB }
+  CheckEqualsStr('uB', VM.DrillRootId, 'drilled into the target''s unit');
+  CheckEqualsStr('uB.TB', VM.SelectedId, 'target class selected');
+  Check(VM.CanGoBack, 'GoToSymbol recorded a history step');
+
+  Proj := VM.Projection;
+  TgtIdx := VM.Data.FindNodeIndex('uB.TB');
+  Found := False;
+  for I := 0 to High(Proj.Nodes) do
+    if Proj.Nodes[I].NodeIdx = TgtIdx then Found := True;
+  Check(Found, 'target class is visible in the drilled-in projection');
+
+  { Back undoes the jump (un-drills); GoToSymbol on a unit drills into the unit. }
+  VM.Back;
+  CheckEqualsStr('', VM.DrillRootId, 'Back undoes the jump');
+  VM.GoToSymbol('uA');
+  CheckEqualsStr('uA', VM.DrillRootId, 'GoToSymbol on a unit drills into it');
+end;
+
+procedure Test_VMWhereUsedComposition;
+var
+  VM: IGraphViewModel;
+  Proj: TGraphProjection;
+  I, TgtIdx: Integer;
+  Found: Boolean;
+begin
+  { "Where Used" must leave a drill scope so callers in OTHER units become
+    visible to focus. This mirrors CtxWhereUsed's VM sequence: un-drill, show all
+    units, reveal + focus the target. Regression: while drilled into uA, focusing
+    a uB symbol highlighted nothing because uB was scoped out. }
+  VM := TGraphViewModel.Create;
+  VM.SetSource(TPreloadedSource.Create(BuildTwoUnitGraph));
+  VM.DrillInto('uA');                       { user is drilled into uA }
+  CheckEqualsStr('uA', VM.DrillRootId, 'drilled into uA');
+
+  { CtxWhereUsed composition for a uB symbol: }
+  if VM.DrillRootId <> '' then VM.DrillToDepth(0);
+  VM.SetShowAllTopLevel(True);
+  VM.NavigateTo('uB.TB');
+  VM.SetFocus('uB.TB', 1);
+
+  CheckEqualsStr('', VM.DrillRootId, 'Where-Used left the drill scope');
+  Proj := VM.Projection;
+  TgtIdx := VM.Data.FindNodeIndex('uB.TB');
+  Found := False;
+  for I := 0 to High(Proj.Nodes) do
+    if Proj.Nodes[I].NodeIdx = TgtIdx then Found := True;
+  Check(Found, 'the uB target is visible (no longer scoped out) so focus can highlight it');
+end;
+
 initialization
   RegisterTest('VMLoadsViaSource', Test_VMLoadsViaSource);
+  RegisterTest('VMNavigateEscapesDrill', Test_VMNavigateEscapesDrill);
+  RegisterTest('VMDrillBackForward', Test_VMDrillBackForward);
+  RegisterTest('VMGoToSymbolDrillsIntoUnit', Test_VMGoToSymbolDrillsIntoUnit);
+  RegisterTest('VMWhereUsedComposition', Test_VMWhereUsedComposition);
   RegisterTest('VMSelectionFiresEvent', Test_VMSelectionFiresEvent);
   RegisterTest('VMFlatProjection', Test_VMFlatProjection);
   RegisterTest('VMCollapseHidesDescendants', Test_VMCollapseHidesDescendants);

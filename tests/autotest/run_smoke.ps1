@@ -11,7 +11,7 @@
 
 [CmdletBinding()]
 param(
-    [string] $Exe = "$PSScriptRoot\..\..\bin\Win32\drag_lint_graph.exe",
+    [string] $Exe = "$PSScriptRoot\..\..\bin\Win64\drag_lint_graph.exe",
     [string] $OrmDb = "C:\Projects\DB\ORM3\drag-lint.sqlite"
 )
 

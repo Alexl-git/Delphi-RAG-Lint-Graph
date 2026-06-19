@@ -44,27 +44,27 @@ unit DragLint.Graph.OpenSourceClient;
 interface
 
 uses
-  System.SysUtils;   { TBytes }
+  System.SysUtils
+  ; { TBytes }
 
 const
   OPEN_SOURCE_PIPE_NAME = '\\.\pipe\drag-lint-open-source';
 
   { Field/record separators used by the wire framing above. }
-  OPEN_SOURCE_SEP   = #9;    { TAB between file and line }
-  OPEN_SOURCE_TERM  = #10;   { LF terminator }
+  OPEN_SOURCE_SEP  = #9; { TAB between file and line }
+  OPEN_SOURCE_TERM = #10; { LF terminator }
 
-{ Builds the framed UTF-8 message bytes for (AFile, ALine):
+  { Builds the framed UTF-8 message bytes for (AFile, ALine):
     <file><TAB><line><LF>
   Exposed so the round-trip test (and the plugin author) can assert the exact
   byte layout without a live pipe. }
 function BuildOpenSourceMessage(const AFile: string; ALine: Integer): TBytes;
-  overload;
+overload;
 { Column-aware framing (contract v2):  <file><TAB><line><TAB><col><LF>.
   ACol is the 1-based caret column; <= 0 is sent as 1.  The server reads the
   line positionally and treats the column as optional, so this stays
   back-compatible with a v1 (file+line only) reader. }
-function BuildOpenSourceMessage(const AFile: string; ALine, ACol: Integer):
-  TBytes; overload;
+function BuildOpenSourceMessage(const AFile: string; ALine, ACol: Integer): TBytes; overload;
 
 { Sends an open-source request to the running plugin.
 
@@ -73,84 +73,76 @@ function BuildOpenSourceMessage(const AFile: string; ALine, ACol: Integer):
   the host should then fall back to ShellExecute so standalone use still works.
 
   Never raises: all Win32 failures are reported as a False result. }
-function SendOpenSource(const AFile: string; ALine: Integer;
-  AWaitMs: Cardinal = 200): Boolean;
+function SendOpenSource(const AFile: string; ALine: Integer; AWaitMs: Cardinal = 200): Boolean;
 { Column-aware send (contract v2).  Distinct name (not an overload) so it never
   collides with the file+line+waitMs signature above. }
-function SendOpenSourceAt(const AFile: string; ALine, ACol: Integer;
-  AWaitMs: Cardinal = 200): Boolean;
+function SendOpenSourceAt(const AFile: string; ALine, ACol: Integer; AWaitMs: Cardinal = 200): Boolean;
 
 implementation
 
 uses
-  Winapi.Windows;
+  Winapi.Windows
+  ;
 
 function BuildOpenSourceMessage(const AFile: string; ALine: Integer): TBytes;
 var
   Line: string;
 begin
-  Line := AFile + OPEN_SOURCE_SEP + IntToStr(ALine) + OPEN_SOURCE_TERM;
-  Result := TEncoding.UTF8.GetBytes(Line);
+  Line:= AFile + OPEN_SOURCE_SEP + IntToStr(ALine) + OPEN_SOURCE_TERM;
+  Result:= TEncoding.UTF8.GetBytes(Line);
 end;
 
-function BuildOpenSourceMessage(const AFile: string; ALine, ACol: Integer):
-  TBytes;
+function BuildOpenSourceMessage(const AFile: string; ALine, ACol: Integer): TBytes;
 var
-  Line: string;
-  Col:  Integer;
+  Line: string ;
+  Col : Integer;
 begin
-  Col := ACol;
-  if Col < 1 then Col := 1;
-  Line := AFile + OPEN_SOURCE_SEP + IntToStr(ALine) +
-          OPEN_SOURCE_SEP + IntToStr(Col) + OPEN_SOURCE_TERM;
-  Result := TEncoding.UTF8.GetBytes(Line);
+  Col:= ACol;
+  if Col < 1 then Col:= 1;
+  Line:= AFile + OPEN_SOURCE_SEP + IntToStr(ALine) + OPEN_SOURCE_SEP + IntToStr(Col) + OPEN_SOURCE_TERM;
+  Result:= TEncoding.UTF8.GetBytes(Line);
 end;
 
 { Shared transport: writes one framed message to the pipe.  Returns True only
   if a server was present AND the whole message was written.  Never raises. }
 function SendOpenSourceBytes(const AMsg: TBytes; AWaitMs: Cardinal): Boolean;
 var
-  H:       THandle;
-  Written: DWORD;
+  H      : THandle;
+  Written: DWORD  ;
 begin
-  Result := False;
+  Result:= False;
   if Length(AMsg) = 0 then Exit;
 
   { Fast no-server check: if no instance is available within AWaitMs we bail
     so the caller can ShellExecute instead of blocking the UI. }
   if not WaitNamedPipe(OPEN_SOURCE_PIPE_NAME, AWaitMs) then Exit;
 
-  H := CreateFile(OPEN_SOURCE_PIPE_NAME, GENERIC_WRITE, 0, nil,
-    OPEN_EXISTING, 0, 0);
+  H:= CreateFile(OPEN_SOURCE_PIPE_NAME, GENERIC_WRITE, 0, nil, OPEN_EXISTING, 0, 0);
   if H = INVALID_HANDLE_VALUE then Exit;
   try
-    Written := 0;
-    if WriteFile(H, AMsg[0], DWORD(Length(AMsg)), Written, nil)
-       and (Written = DWORD(Length(AMsg))) then
+    Written:= 0;
+    if WriteFile(H, AMsg[0], DWORD(Length(AMsg)), Written, nil) and (Written = DWORD(Length(AMsg))) then
     begin
       FlushFileBuffers(H);
-      Result := True;
+      Result:= True;
     end;
   finally
     CloseHandle(H);
   end;
+end; // function
+
+function SendOpenSource(const AFile: string; ALine: Integer; AWaitMs: Cardinal): Boolean;
+begin
+  Result:= False;
+  if AFile = '' then Exit;
+  Result:= SendOpenSourceBytes(BuildOpenSourceMessage(AFile, ALine), AWaitMs);
 end;
 
-function SendOpenSource(const AFile: string; ALine: Integer;
-  AWaitMs: Cardinal): Boolean;
+function SendOpenSourceAt(const AFile: string; ALine, ACol: Integer; AWaitMs: Cardinal): Boolean;
 begin
-  Result := False;
+  Result:= False;
   if AFile = '' then Exit;
-  Result := SendOpenSourceBytes(BuildOpenSourceMessage(AFile, ALine), AWaitMs);
-end;
-
-function SendOpenSourceAt(const AFile: string; ALine, ACol: Integer;
-  AWaitMs: Cardinal): Boolean;
-begin
-  Result := False;
-  if AFile = '' then Exit;
-  Result := SendOpenSourceBytes(
-    BuildOpenSourceMessage(AFile, ALine, ACol), AWaitMs);
+  Result:= SendOpenSourceBytes( BuildOpenSourceMessage(AFile, ALine, ACol), AWaitMs);
 end;
 
 end.

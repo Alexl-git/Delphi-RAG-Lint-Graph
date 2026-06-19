@@ -15,6 +15,10 @@ uses
   DragLint.Graph.UsesQuery in '..\control\DragLint.Graph.UsesQuery.pas',
   DragLint.Graph.OpenSourceClient in '..\control\DragLint.Graph.OpenSourceClient.pas',
   DragLint.Graph.Control  in '..\control\DragLint.Graph.Control.pas',
+  DragLint.Graph.Flow     in '..\control\DragLint.Graph.Flow.pas',
+  DragLint.Graph.Flow.Source.Db in '..\control\DragLint.Graph.Flow.Source.Db.pas',
+  DragLint.Graph.Flow.ViewModel in '..\control\DragLint.Graph.Flow.ViewModel.pas',
+  DragLint.Graph.FlowControl in '..\control\DragLint.Graph.FlowControl.pas',
   MainForm                in 'MainForm.pas';
 
 begin

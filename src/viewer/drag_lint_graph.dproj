@@ -63,6 +63,10 @@
         <DCCReference Include="..\control\DragLint.Graph.UsesQuery.pas"/>
         <DCCReference Include="..\control\DragLint.Graph.OpenSourceClient.pas"/>
         <DCCReference Include="..\control\DragLint.Graph.Control.pas"/>
+        <DCCReference Include="..\control\DragLint.Graph.Flow.pas"/>
+        <DCCReference Include="..\control\DragLint.Graph.Flow.Source.Db.pas"/>
+        <DCCReference Include="..\control\DragLint.Graph.Flow.ViewModel.pas"/>
+        <DCCReference Include="..\control\DragLint.Graph.FlowControl.pas"/>
         <DCCReference Include="MainForm.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

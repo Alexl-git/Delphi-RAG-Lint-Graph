@@ -7,7 +7,7 @@ Three groups. **A and B are standalone and ready NOW (no IDE).**
 ## A. GRAPH VIEWER  -  standalone, ready now
 Start it (no IDE):
 
-    C:\Projects\Delphi-RAG-Lint-Graph\bin\Win32\drag_lint_graph.exe --db C:\Projects\DB\ORM3\drag-lint.sqlite
+    C:\Projects\Delphi-RAG-Lint-Graph\bin\Win64\drag_lint_graph.exe --db C:\Projects\DB\ORM3\drag-lint.sqlite
 
 (To also see library types, add a second db:
   ... --db C:\Projects\Delphi-RAG-lint\third_party\dll-win32\drag-lint-library.sqlite )
@@ -48,6 +48,17 @@ Start it (no IDE):
          e.g. "Method: uPLANLIST.TmcPLANLIST.Create  (uPLANLIST.pas:88)".
 [ ] A19. ZOOM: the slider + "Fit" button (top-right) zoom / reset the view.
 [ ] A20. Double-click a node -> drills in (navigate into it).
+[ ] A21. NAV HISTORY: top-right has "<" (Back) and ">" (Forward) buttons left of
+         "Fit". Both start DISABLED (greyed). Hover shows "Back -- previous graph
+         view" / "Forward -- next graph view".
+[ ] A22. Search/select several different symbols in turn (left panel tree, or the
+         search box) -> "<" Back becomes enabled after the 2nd. Click "<" -> the
+         graph re-centers on the PREVIOUS view; ">" Forward becomes enabled.
+[ ] A23. Click ">" Forward -> returns to the later view. At the ends of the
+         history the respective button greys out again (no wrap).
+[ ] A24. After going Back a few steps, navigate somewhere NEW -> the forward tail
+         is dropped (">" greys); the new view is appended. History caps at 100
+         (oldest views fall off; no unbounded growth).
 
 --------------------------------------------------------------------------
 ## B. COMMAND LINE  -  standalone, ready now
@@ -85,6 +96,12 @@ clean now but in-IDE behaviour is unverified - install at your discretion.)
 [ ] C3. Tools -> drag-lint menu: Hover at Cursor, Symbol Search, etc.
 [ ] C4. Tools -> drag-lint -> "Dockable Panel (test)" -> a panel opens that you can
         dock/park at the bottom of the IDE like GExperts Grep (placeholder content).
+[ ] C5. EDITOR-SYNC: with the viewer running and the plugin loaded, switch the
+        active editor tab (or move the caret to another unit) -> the graph CENTERS
+        on that unit/symbol. The nav-history "<" Back button then undoes the
+        editor-driven jump (returns to the prior view). Switching to a unit that
+        isn't in the loaded graph shows "Editor sync: ... not in this graph." in
+        the status bar and leaves the view unchanged.
 
 --------------------------------------------------------------------------
 ## D. AUTOMATION  -  already live
@@ -92,6 +109,10 @@ clean now but in-IDE behaviour is unverified - install at your discretion.)
 [ ] D2. The "DragLint Daily Report" Windows task runs daily at 4:00 PM and emails a
         report: drag-lint-vs-Grep savings + GitHub activity across all 6 repos
         (downloads/stars/issues/traffic + day-over-day deltas). Next run: today 4 PM.
+[ ] D3. Editor-sync receiver smoke (no IDE): tests\autotest\wmcopydata_smoke.ps1
+        launches the viewer, sends WM_COPYDATA (valid/bogus/wrong-magic symbols),
+        and asserts the viewer survives + resolves the valid one. Exercises the
+        graph-side half of C5 in isolation.
 
 --------------------------------------------------------------------------
 NOTE: all code is committed LOCALLY and NOT pushed to GitHub (per your hold).

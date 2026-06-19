@@ -136,7 +136,7 @@ tests/
   console/         Headless unit test suite (41 tests, no GUI required)
   autotest/        GUI smoke test -- builds and launches the viewer
 build/
-  build_viewer.bat Builds drag_lint_graph.exe (Win32 Debug)
+  build_viewer.bat Builds drag_lint_graph.exe (Win64 Debug)
 docs/
   drag-lint/       drag-lint SQLite schema contract docs
   superpowers/     Implementation specs and plans (AI session artefacts)
@@ -152,7 +152,8 @@ docs/
 build\build_viewer.bat
 ```
 
-Produces `bin\Win32\drag_lint_graph.exe`.
+Produces `bin\Win64\drag_lint_graph.exe`. (The viewer is a standalone process, so
+it builds Win64 -- unbound by the 32-bit IDE, with memory headroom for large indexes.)
 
 **All-in-one:**
 
