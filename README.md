@@ -112,7 +112,7 @@ src/
                     OpenSourceClient, Control)
   viewer/          drag_lint_graph.dpr -- demo host EXE
 tests/
-  console/         Headless unit test suite (41 tests, no GUI required)
+  console/         Headless unit test suite (64 tests, no GUI required)
   autotest/        GUI smoke test -- builds and launches the viewer
 build/
   build_viewer.bat Builds drag_lint_graph.exe (Win64 Debug)
@@ -143,11 +143,20 @@ build\build_all.bat
 Builds runtime BPL + DB BPL + design-time BPL + viewer EXE, then runs both
 test gates.
 
+**Package platform targets.** The two *runtime* packages (`DragLintGraph`,
+`DragLintGraphDb`) target both Win32 and Win64, so the control can be consumed by
+64-bit host applications; outputs are separated into `bin\Win32` and `bin\Win64`.
+The design-time package (`DragLintGraphDcl`) is **Win32-only on purpose** -- it is
+`{$DESIGNONLY}` and the RAD Studio IDE is a 32-bit process, so a Win64 build of it
+has no consumer. It *does* compile for Win64 without error, which is the trap: the
+result is a BPL the IDE silently cannot load. `build_all.bat` always passes an
+explicit `/p:Platform`, so it is unaffected either way.
+
 ---
 
 ## Test
 
-**Headless unit suite (41 tests, no DB required for most):**
+**Headless unit suite (64 tests, no DB required for most):**
 
 ```
 pwsh tests\console\run.ps1
@@ -176,7 +185,21 @@ drag_lint_graph.exe --db C:\Projects\DB\ORM3\drag-lint.sqlite ^
                     --db C:\Projects\DB\Library\drag-lint.sqlite
 ```
 
-Running without arguments prints a usage hint.
+**Manifest-driven DB selection (no `--db`).** Launched with no `--db`, the viewer
+shells out to `drag-lint.exe resolve-dbs --json` and opens whatever the engine's
+index manifest resolves to, so it needs no hard-coded paths:
+
+```
+drag_lint_graph.exe
+drag_lint_graph.exe --platform win64
+```
+
+`--platform win32|win64` is forwarded to `resolve-dbs`, which selects the matching
+per-platform library index (`library-Win32.sqlite` vs `library-Win64.sqlite`).
+The engine is located beside the viewer EXE, else via the development layout
+`..\..\..\Delphi-RAG-lint\third_party\dll-win64\drag-lint.exe`. If no engine or
+no manifest is found the viewer degrades to the usage hint in the status bar
+rather than failing.
 
 ---
 
@@ -194,6 +217,14 @@ Live-test findings fixed: **F1-F5** (hover flicker, cross-DB hang, zoom UI,
 node labels, off-screen startup) and **F6-F7** (single-click expand /
 single-click open-source via named pipe to the running IDE). See
 `docs/test-findings-*.md` and `docs/ipc-open-source-contract.md`.
+
+**Recent additions:**
+
+- **"Where Used"** -- precise caller *list* in the panel (not a dense hairball).
+- **Class-level flow aggregation** -- trace flow from a whole class.
+- **Editor-sync** -- the viewer publishes its window handle to a registry so
+  the running RAD Studio can discover it and jump in step with the editor.
+- **`--flow` / `--selftest`** self-diagnostics; word-wrapped flow boxes.
 
 **Deferred (not yet implemented):**
 
