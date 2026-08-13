@@ -1,6 +1,6 @@
 # Delphi-RAG-Lint-Graph -- Resume Doc / Backlog
 
-Canonical cold-start pointer for this repo. Last updated: 2026-07-29.
+Canonical cold-start pointer for this repo. Last updated: 2026-08-13.
 
 Pure-VCL interactive graph viewer + reusable `TDragLintGraphControl` over drag-lint's
 SQLite index. No WebView2/HTML/JS. Sibling repo `C:\Projects\Delphi-RAG-lint` produces
@@ -92,6 +92,27 @@ All green, on this working tree:
   `cmd /c` from the Bash tool.
 
 ## Not done yet / backlog ideas
+
+### High Priority (2026-08-13 planning)
+
+**Side-effect badges on Code Flow View** (SPEC: `docs/superpowers/specs/2026-08-11-side-effect-badges-design.md`)
+- **Phase 1 (next action):** Render transaction/resource badges on each flow step box
+  - `TSideEffects = set of TSideEffect` (1 byte/node, 7 badge types: TX-start/commit/rollback, file/registry/network, var-out)
+  - Query: LEFT JOIN `symbol_facts` on `s.id` (indexed on v21, unindexed on v19)
+  - Parse touches+mutates_params into set at load
+  - Render as badge strip (position TBD: header line or corner cluster?)
+  - Fetch raw text lazily on hover for the one node under cursor
+  - Support v19 (no index, still performant with node cap) and pre-v18 (no column, graceful no-badge degradation)
+- Phase 2 (future): same badges on UML class box member rows
+- **Why:** Code Flow View cannot show where transactions open/close or var parameters mutate -- badges make these boundaries visible without reading bodies
+
+**CodeLens cache memory leak** — sent to drag-lint team as INBOX (delphi-plugin team owns)
+- INBOX filed: `C:\Projects\Delphi-RAG-lint\docs\INBOX-codelens-cache-has-no-eviction.md`
+- `FByFile: TDictionary<string,TDictionary<Integer,string>>` grows monotonically with no eviction
+- Impact: 32-bit in-process DLL, IDE address space is already tight
+- Suggested fixes: per-file removal on editor close OR LRU cap on FByFile
+
+### Lower Priority
 
 - Deferred viewer features (from README): LOD / semantic auto-zoom (progressive detail
   on zoom in). See README "Deferred (not yet implemented)".
